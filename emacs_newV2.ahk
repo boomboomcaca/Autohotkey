@@ -644,7 +644,7 @@ OllamaTranslate(text)
   prompt := StrReplace(prompt, "`n", "\n")
   prompt := StrReplace(prompt, "`r", "\r")
   prompt := StrReplace(prompt, "`t", "\t")
-  json := "{`"model`":`"qwen3:latest`",`"prompt`":`"" . prompt . "`",`"stream`":false}"
+  json := "{`"model`":`"qwen3:latest`",`"prompt`":`"" . prompt . "`",`"stream`":false,`"options`":{`"temperature`":0,`"num_predict`":2048}}"
   
   ; 调用 Ollama API
   try {
@@ -688,7 +688,7 @@ global ; V1toV2: Made function global
   
   ; 先全选再复制
   Send("^a")
-  Sleep(100)
+  Sleep(50)
   Send("^c")
   Errorlevel := !ClipWait(2)
   if ErrorLevel {
@@ -706,9 +706,9 @@ global ; V1toV2: Made function global
   
   if (result != "") {
     A_Clipboard := result
-    Sleep(50)
+    Sleep(30)
     Send("^v")
-    Sleep(200)
+    Sleep(100)
     A_Clipboard := oldClip
   } else {
     A_Clipboard := oldClip
