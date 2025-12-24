@@ -634,9 +634,9 @@ OllamaTranslate(text)
 {
   ; 判断中英文
   if RegExMatch(text, "[\x{4e00}-\x{9fff}]")
-    prompt := "Translate to English. Keep the exact same formatting. Output only the translation:`n" . text
+    prompt := "Translate to English. Keep the exact same formatting, including punctuation marks, line breaks, and spacing. Output only the translation:`n" . text
   else
-    prompt := "Translate to Chinese. Keep the exact same formatting. Output only the translation:`n" . text
+    prompt := "Translate to Chinese. Keep the exact same formatting, including punctuation marks, line breaks, and spacing. Output only the translation:`n" . text
   
   ; 构建 JSON
   prompt := StrReplace(prompt, "\", "\\")
