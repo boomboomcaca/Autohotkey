@@ -627,17 +627,24 @@ return
 } ; V1toV2: Added closing brace for [^!down]
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-; Ollama 翻译 - Ctrl+Alt+Enter: 全选并翻译替换
+; Ollama 翻译/纠错 - Ctrl+Alt+Enter: 中文→翻译英文，英文→纠正表达
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-OllamaTranslate(text)
+g_OriginalText := ""
+g_TranslateResult := ""
+g_CorrectResult := ""
+g_OldClip := ""
+g_MainGui := ""
+g_TranslateEditCtrl := ""
+g_CorrectEditCtrl := ""
+g_CorrectLabelCtrl := ""
+g_TranslateLabelCtrl := ""
+g_IsChineseMode := false
+g_SelectedResult := "translate"
+g_PendingText := ""
+
+OllamaCall(prompt)
 {
-  ; 判断中英文
-  if RegExMatch(text, "[\x{4e00}-\x{9fff}]")
-    prompt := "/no_think Translate to English. Keep the exact same formatting, including punctuation marks, line breaks, and spacing. Output only the translation:`n" . text
-  else
-    prompt := "/no_think Translate to Chinese. Keep the exact same formatting, including punctuation marks, line breaks, and spacing. Output only the translation:`n" . text
-  
   ; 构建 JSON
   prompt := StrReplace(prompt, "\", "\\")
   prompt := StrReplace(prompt, "`"", "\`"")
@@ -646,7 +653,6 @@ OllamaTranslate(text)
   prompt := StrReplace(prompt, "`t", "\t")
   json := "{`"model`":`"qwen3:latest`",`"prompt`":`"" . prompt . "`",`"stream`":false,`"options`":{`"temperature`":0,`"num_predict`":2048}}"
   
-  ; 调用 Ollama API
   try {
     http := ComObject("WinHttp.WinHttpRequest.5.1")
     http.Open("POST", "http://localhost:11434/api/generate", false)
@@ -655,20 +661,17 @@ OllamaTranslate(text)
     http.WaitForResponse()
     
     response := http.ResponseText
-    ; 提取 response 字段
     if RegExMatch(response, "`"response`"\s*:\s*`"(.*?)`"(?=\s*,\s*`")", &m)
       result := m[1]
     else
       return "解析失败"
     
-    ; 还原转义
     result := StrReplace(result, "\n", "`n")
     result := StrReplace(result, "\r", "`r")
     result := StrReplace(result, "\t", "`t")
     result := StrReplace(result, "\`"", "`"")
     result := StrReplace(result, "\\", "\")
     
-    ; 清理 think 标签
     result := RegExReplace(result, "s)<think>.*?</think>", "")
     result := StrReplace(result, "/think")
     result := StrReplace(result, "/no_think")
@@ -680,38 +683,187 @@ OllamaTranslate(text)
   }
 }
 
+OllamaTranslate(text, isChinese)
+{
+  if isChinese
+    prompt := "/no_think Translate to English. Keep the exact same formatting, including punctuation marks, line breaks, and spacing. Output only the translation:`n" . text
+  else
+    prompt := "/no_think Translate to Chinese. Keep the exact same formatting, including punctuation marks, line breaks, and spacing. Output only the translation:`n" . text
+  return OllamaCall(prompt)
+}
+
+OllamaCorrect(text, isChinese)
+{
+  if isChinese
+    prompt := "/no_think You are a Chinese language tutor. Correct and improve the following Chinese text. Fix grammar, punctuation, and improve expression while keeping the original meaning. Output only the corrected text without any explanation:`n" . text
+  else
+    prompt := "/no_think You are an English language tutor. Correct and improve the following English text. Fix grammar, spelling, punctuation, and improve expression while keeping the original meaning. Output only the corrected text without any explanation:`n" . text
+  return OllamaCall(prompt)
+}
+
+ShowMainGui(original)
+{
+  global g_OriginalText, g_TranslateResult, g_CorrectResult, g_OldClip, g_MainGui
+  global g_TranslateEditCtrl, g_CorrectEditCtrl, g_CorrectLabelCtrl, g_TranslateLabelCtrl, g_IsChineseMode, g_SelectedResult
+  
+  g_OriginalText := original
+  g_TranslateResult := ""
+  g_CorrectResult := ""
+  g_SelectedResult := "correct"
+  
+  ; 判断中英文
+  g_IsChineseMode := RegExMatch(original, "[\x{4e00}-\x{9fff}]")
+  
+  if g_IsChineseMode {
+    title := "中文处理 - Enter 替换 / Esc 取消"
+    correctLabel := "纠错 (中文润色):"
+    translateLabel := "翻译 (中→英):"
+  } else {
+    title := "英文处理 - Enter 替换 / Esc 取消"
+    correctLabel := "纠错 (英文润色):"
+    translateLabel := "翻译 (英→中):"
+  }
+  
+  g_MainGui := Gui("+AlwaysOnTop -MinimizeBox", title)
+  g_MainGui.SetFont("s10", "Microsoft YaHei")
+  
+  g_MainGui.AddText("w500", "原文:")
+  origEdit := g_MainGui.AddEdit("w500 h60 ReadOnly", original)
+  
+  if g_IsChineseMode {
+    ; 中文：翻译在前
+    g_TranslateLabelCtrl := g_MainGui.AddText("w500", "✓ " . translateLabel)
+    g_TranslateEditCtrl := g_MainGui.AddEdit("w500 h60 ReadOnly", "正在翻译...")
+    g_CorrectLabelCtrl := g_MainGui.AddText("w500", "   " . correctLabel)
+    g_CorrectEditCtrl := g_MainGui.AddEdit("w500 h60 ReadOnly", "正在纠错...")
+    g_SelectedResult := "translate"
+  } else {
+    ; 英文：纠错在前
+    g_CorrectLabelCtrl := g_MainGui.AddText("w500", "✓ " . correctLabel)
+    g_CorrectEditCtrl := g_MainGui.AddEdit("w500 h60 ReadOnly", "正在纠错...")
+    g_TranslateLabelCtrl := g_MainGui.AddText("w500", "   " . translateLabel)
+    g_TranslateEditCtrl := g_MainGui.AddEdit("w500 h60 ReadOnly", "正在翻译...")
+    g_SelectedResult := "correct"
+  }
+  
+  g_MainGui.AddText("w500 cGray", "Tab 切换 | Enter 替换 | Esc 取消")
+  
+  g_MainGui.OnEvent("Close", Gui_Close)
+  g_MainGui.OnEvent("Escape", Gui_Close)
+  
+  g_MainGui.Show()
+  SendMessage(0xB1, -1, 0, origEdit.Hwnd)
+  
+  HotIfWinActive("ahk_id " g_MainGui.Hwnd)
+  Hotkey("Enter", Gui_Apply.Bind(g_MainGui), "On")
+  Hotkey("Tab", Gui_ToggleSelect, "On")
+  HotIfWinActive()
+  
+  ; 直接调用 API
+  text := original
+  isChinese := RegExMatch(text, "[\x{4e00}-\x{9fff}]")
+  
+  ; 纠错
+  correctResult := OllamaCorrect(text, isChinese)
+  if (correctResult != "" && correctResult != "解析失败" && !InStr(correctResult, "请求失败"))
+    UpdateCorrectResult(correctResult)
+  else
+    UpdateCorrectResult("纠错失败: " . correctResult)
+  
+  ; 翻译
+  translateResult := OllamaTranslate(text, isChinese)
+  if (translateResult != "" && translateResult != "解析失败" && !InStr(translateResult, "请求失败"))
+    UpdateTranslateResult(translateResult)
+  else
+    UpdateTranslateResult("翻译失败: " . translateResult)
+}
+
+Gui_ToggleSelect(*)
+{
+  global g_SelectedResult, g_CorrectLabelCtrl, g_TranslateLabelCtrl, g_IsChineseMode
+  
+  if (g_IsChineseMode) {
+    correctLabel := "纠错 (中文润色):"
+    translateLabel := "翻译 (中→英):"
+  } else {
+    correctLabel := "纠错 (英文润色):"
+    translateLabel := "翻译 (英→中):"
+  }
+  
+  if (g_SelectedResult = "correct") {
+    g_SelectedResult := "translate"
+    g_CorrectLabelCtrl.Text := "   " . correctLabel
+    g_TranslateLabelCtrl.Text := "✓ " . translateLabel
+  } else {
+    g_SelectedResult := "correct"
+    g_CorrectLabelCtrl.Text := "✓ " . correctLabel
+    g_TranslateLabelCtrl.Text := "   " . translateLabel
+  }
+}
+
+UpdateTranslateResult(result)
+{
+  global g_TranslateResult, g_TranslateEditCtrl
+  g_TranslateResult := result
+  if (g_TranslateEditCtrl != "")
+    g_TranslateEditCtrl.Value := result
+}
+
+UpdateCorrectResult(result)
+{
+  global g_CorrectResult, g_CorrectEditCtrl
+  g_CorrectResult := result
+  if (g_CorrectEditCtrl != "")
+    g_CorrectEditCtrl.Value := result
+}
+
+Gui_Apply(guiObj, *)
+{
+  global g_TranslateResult, g_CorrectResult, g_OldClip, g_SelectedResult
+  guiObj.Destroy()
+  
+  result := (g_SelectedResult = "translate") ? g_TranslateResult : g_CorrectResult
+  
+  if (result != "" && !InStr(result, "失败")) {
+    A_Clipboard := result
+    Sleep(30)
+    Send("^a")
+    Sleep(30)
+    Send("^v")
+    Sleep(100)
+    A_Clipboard := g_OldClip
+  } else {
+    A_Clipboard := g_OldClip
+  }
+}
+
+Gui_Close(guiObj, *)
+{
+  global g_OldClip
+  guiObj.Destroy()
+  A_Clipboard := g_OldClip
+}
+
 ^!Enter::
-{ ; V1toV2: Added opening brace for [^!Enter]
-global ; V1toV2: Made function global
-  oldClip := ClipboardAll()
+{
+  global g_OldClip, g_IsChineseMode
+  g_OldClip := ClipboardAll()
   A_Clipboard := ""
   
-  ; 先全选再复制
   Send("^a")
   Sleep(50)
   Send("^c")
   Errorlevel := !ClipWait(2)
   if ErrorLevel {
-    A_Clipboard := oldClip
+    A_Clipboard := g_OldClip
     return
   }
   
   text := Trim(A_Clipboard)
   if (text = "") {
-    A_Clipboard := oldClip
+    A_Clipboard := g_OldClip
     return
   }
   
-  result := OllamaTranslate(text)
-  
-  if (result != "") {
-    A_Clipboard := result
-    Sleep(30)
-    Send("^v")
-    Sleep(100)
-    A_Clipboard := oldClip
-  } else {
-    A_Clipboard := oldClip
-  }
-return
-} ; V1toV2: Added closing brace for [^!Enter]
+  ShowMainGui(text)
+}
