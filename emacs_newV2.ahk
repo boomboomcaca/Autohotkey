@@ -650,6 +650,8 @@ g_TranslatePending := false
 g_CorrectRequested := false
 g_TranslateRequested := false
 g_CurrentText := ""
+g_TtsPlaying := false
+g_HoverTarget := ""
 
 OllamaCall(prompt)
 {
@@ -713,6 +715,7 @@ ShowMainGui(original)
 {
   global g_OriginalText, g_TranslateResult, g_CorrectResult, g_OldClip, g_MainGui
   global g_TranslateEditCtrl, g_CorrectEditCtrl, g_CorrectLabelCtrl, g_TranslateLabelCtrl, g_OrigEditCtrl, g_IsChineseMode, g_SelectedResult
+  global g_TtsOrigCtrl, g_TtsCorrectCtrl, g_TtsTranslateCtrl
   
     ; 如果已有窗口存在，先关闭
   if (g_MainGui != "") {
@@ -743,8 +746,16 @@ ShowMainGui(original)
   g_MainGui := Gui("+AlwaysOnTop -MinimizeBox", title)
   g_MainGui.SetFont("s10", "Microsoft YaHei")
   
-  g_MainGui.AddText("w500", "原文 (可编辑):")
-  g_OrigEditCtrl := g_MainGui.AddEdit("w500 h60", original)
+  ; 英文模式显示朗读图标
+  if !g_IsChineseMode {
+    g_MainGui.AddText("w120 Section", "原文 (可编辑):")
+    g_TtsOrigCtrl := g_MainGui.AddText("x+5 ys cGray", "🔊")
+    g_TtsOrigCtrl.OnEvent("Click", Gui_PlayOriginal)
+    g_OrigEditCtrl := g_MainGui.AddEdit("xm w500 h60", original)
+  } else {
+    g_MainGui.AddText("w500", "原文 (可编辑):")
+    g_OrigEditCtrl := g_MainGui.AddEdit("xm w500 h60", original)
+  }
   
   if g_IsChineseMode {
     ; 中文：翻译在前
@@ -754,11 +765,15 @@ ShowMainGui(original)
     g_CorrectEditCtrl := g_MainGui.AddEdit("w500 h60 ReadOnly", "(切换后加载)")
     g_SelectedResult := "translate"
   } else {
-    ; 英文：纠错在前
-    g_CorrectLabelCtrl := g_MainGui.AddText("w500", "✓ " . correctLabel)
-    g_CorrectEditCtrl := g_MainGui.AddEdit("w500 h60 ReadOnly", "正在纠错...")
-    g_TranslateLabelCtrl := g_MainGui.AddText("w500", "   " . translateLabel)
-    g_TranslateEditCtrl := g_MainGui.AddEdit("w500 h60 ReadOnly", "(切换后加载)")
+    ; 英文：纠错在前，添加朗读图标
+    g_CorrectLabelCtrl := g_MainGui.AddText("w120 Section", "✓ " . correctLabel)
+    g_TtsCorrectCtrl := g_MainGui.AddText("x+5 ys cGray", "🔊")
+    g_TtsCorrectCtrl.OnEvent("Click", Gui_PlayCorrect)
+    g_CorrectEditCtrl := g_MainGui.AddEdit("xm w500 h60 ReadOnly", "正在纠错...")
+    g_TranslateLabelCtrl := g_MainGui.AddText("w120 Section", "   " . translateLabel)
+    g_TtsTranslateCtrl := g_MainGui.AddText("x+5 ys cGray", "🔊")
+    g_TtsTranslateCtrl.OnEvent("Click", Gui_PlayTranslate)
+    g_TranslateEditCtrl := g_MainGui.AddEdit("xm w500 h60 ReadOnly", "(切换后加载)")
     g_SelectedResult := "correct"
   }
   
@@ -783,6 +798,10 @@ ShowMainGui(original)
   g_CorrectRequested := false
   g_TranslateRequested := false
   StartAsyncRequests(original, g_SelectedResult)
+  
+  ; 英文模式启动悬停检测定时器
+  if !g_IsChineseMode
+    SetTimer(CheckTtsHover, 200)
 }
 
 StartAsyncRequests(text, requestType := "default")
@@ -1022,9 +1041,254 @@ Gui_Apply(guiObj, *)
   }
 }
 
+Gui_PlayOriginal(*)
+{
+  global g_OrigEditCtrl, g_IsChineseMode
+  static tempFile := ""
+  
+  ; 只在英文模式下朗读
+  if (g_IsChineseMode)
+    return
+  
+  text := Trim(g_OrigEditCtrl.Value)
+  if (text = "")
+    return
+  
+  ; 停止之前的播放
+  try {
+    SoundPlay("NonExistent.zzz")
+  }
+  Sleep(50)
+  
+  ; 删除旧文件
+  if (tempFile != "" && FileExist(tempFile)) {
+    try {
+      FileDelete(tempFile)
+    }
+  }
+  
+  ; 使用 Google TTS API
+  try {
+    ; 构建 Google TTS URL
+    encodedText := ""
+    Loop Parse, text
+    {
+      char := A_LoopField
+      if RegExMatch(char, "[a-zA-Z0-9\-_.~]")
+        encodedText .= char
+      else
+        encodedText .= "%" . Format("{:02X}", Ord(char))
+    }
+    
+    ttsUrl := "https://translate.google.com/translate_tts?ie=UTF-8&tl=en-US&client=tw-ob&q=" . encodedText
+    
+    ; 使用固定文件名
+    tempFile := A_Temp . "\ahk_tts_audio.mp3"
+    
+    http := ComObject("WinHttp.WinHttpRequest.5.1")
+    http.Open("GET", ttsUrl, false)
+    http.SetRequestHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+    http.SetRequestHeader("Referer", "https://translate.google.com/")
+    http.Send()
+    http.WaitForResponse()
+    
+    if (http.Status = 200) {
+      ; 保存音频文件
+      adoStream := ComObject("ADODB.Stream")
+      adoStream.Type := 1  ; Binary
+      adoStream.Open()
+      adoStream.Write(http.ResponseBody)
+      adoStream.SaveToFile(tempFile, 2)  ; 2 = overwrite
+      adoStream.Close()
+      
+      ; 播放音频
+      SoundPlay(tempFile)
+    }
+  } catch Error as e {
+    ; 静默失败
+  }
+}
+
+Gui_PlayCorrect(*)
+{
+  global g_CorrectEditCtrl
+  PlayTtsText(g_CorrectEditCtrl.Value)
+}
+
+Gui_PlayTranslate(*)
+{
+  global g_TranslateEditCtrl
+  PlayTtsText(g_TranslateEditCtrl.Value)
+}
+
+PlayTtsText(text)
+{
+  static tempFile := ""
+  
+  text := Trim(text)
+  if (text = "" || InStr(text, "正在") || InStr(text, "切换后"))
+    return
+  
+  ; 停止之前的播放
+  try {
+    SoundPlay("NonExistent.zzz")
+  }
+  Sleep(50)
+  
+  ; 删除旧文件
+  if (tempFile != "" && FileExist(tempFile)) {
+    try {
+      FileDelete(tempFile)
+    }
+  }
+  
+  ; 使用 Google TTS API
+  try {
+    encodedText := ""
+    Loop Parse, text
+    {
+      char := A_LoopField
+      if RegExMatch(char, "[a-zA-Z0-9\-_.~]")
+        encodedText .= char
+      else
+        encodedText .= "%" . Format("{:02X}", Ord(char))
+    }
+    
+    ttsUrl := "https://translate.google.com/translate_tts?ie=UTF-8&tl=en-US&client=tw-ob&q=" . encodedText
+    tempFile := A_Temp . "\ahk_tts_audio.mp3"
+    
+    http := ComObject("WinHttp.WinHttpRequest.5.1")
+    http.Open("GET", ttsUrl, false)
+    http.SetRequestHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+    http.SetRequestHeader("Referer", "https://translate.google.com/")
+    http.Send()
+    http.WaitForResponse()
+    
+    if (http.Status = 200) {
+      adoStream := ComObject("ADODB.Stream")
+      adoStream.Type := 1
+      adoStream.Open()
+      adoStream.Write(http.ResponseBody)
+      adoStream.SaveToFile(tempFile, 2)
+      adoStream.Close()
+      
+      SoundPlay(tempFile)
+    }
+  } catch {
+  }
+}
+
+CheckTtsHover()
+{
+  global g_TtsOrigCtrl, g_TtsCorrectCtrl, g_TtsTranslateCtrl
+  global g_MainGui, g_TtsPlaying, g_IsChineseMode, g_HoverTarget
+  static lastHoverCtrl := ""
+
+  ; 如果窗口已关闭或中文模式，停止定时器
+  if (g_MainGui = "" || g_IsChineseMode) {
+    SetTimer(CheckTtsHover, 0)
+    return
+  }
+
+  ; 检测鼠标在哪个朗读图标上
+  currentHover := ""
+  try {
+    MouseGetPos(&mx, &my, &winUnder, &ctrlUnder, 2)
+    if (ctrlUnder = g_TtsOrigCtrl.Hwnd)
+      currentHover := "orig"
+    else if (ctrlUnder = g_TtsCorrectCtrl.Hwnd)
+      currentHover := "correct"
+    else if (ctrlUnder = g_TtsTranslateCtrl.Hwnd)
+      currentHover := "translate"
+  } catch {
+  }
+
+  if (currentHover != "" && currentHover != lastHoverCtrl) {
+    ; 进入新图标，开始播放
+    g_TtsPlaying := true
+    g_HoverTarget := currentHover
+    PlayTtsLoop()
+  } else if (currentHover = "" && lastHoverCtrl != "") {
+    ; 离开图标，停止播放
+    g_TtsPlaying := false
+    g_HoverTarget := ""
+    try {
+      SoundPlay("NonExistent.zzz")
+    }
+  }
+
+  lastHoverCtrl := currentHover
+}
+
+PlayTtsLoop()
+{
+  global g_TtsPlaying, g_IsChineseMode, g_HoverTarget
+  global g_OrigEditCtrl, g_CorrectEditCtrl, g_TranslateEditCtrl
+  static tempFile := ""
+
+  if (!g_TtsPlaying || g_IsChineseMode || g_HoverTarget = "")
+    return
+
+  ; 根据悬停目标获取文本
+  if (g_HoverTarget = "orig")
+    text := Trim(g_OrigEditCtrl.Value)
+  else if (g_HoverTarget = "correct")
+    text := Trim(g_CorrectEditCtrl.Value)
+  else if (g_HoverTarget = "translate")
+    text := Trim(g_TranslateEditCtrl.Value)
+  else
+    return
+
+  if (text = "" || InStr(text, "正在") || InStr(text, "切换后"))
+    return
+
+  ; 使用 Google TTS API
+  try {
+    encodedText := ""
+    Loop Parse, text
+    {
+      char := A_LoopField
+      if RegExMatch(char, "[a-zA-Z0-9\-_.~]")
+        encodedText .= char
+      else
+        encodedText .= "%" . Format("{:02X}", Ord(char))
+    }
+
+    ttsUrl := "https://translate.google.com/translate_tts?ie=UTF-8&tl=en-US&client=tw-ob&q=" . encodedText
+    tempFile := A_Temp . "\ahk_tts_audio.mp3"
+
+    http := ComObject("WinHttp.WinHttpRequest.5.1")
+    http.Open("GET", ttsUrl, false)
+    http.SetRequestHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+    http.SetRequestHeader("Referer", "https://translate.google.com/")
+    http.Send()
+    http.WaitForResponse()
+
+    if (http.Status = 200) {
+      adoStream := ComObject("ADODB.Stream")
+      adoStream.Type := 1
+      adoStream.Open()
+      adoStream.Write(http.ResponseBody)
+      adoStream.SaveToFile(tempFile, 2)
+      adoStream.Close()
+
+      ; 播放并等待完成
+      SoundPlay(tempFile, "Wait")
+
+      ; 播放完毕后如果还在悬停，继续播放
+      if (g_TtsPlaying)
+        SetTimer(PlayTtsLoop, -100)
+    }
+  } catch {
+  }
+}
+
 Gui_Close(guiObj, *)
 {
-  global g_OldClip
+  global g_OldClip, g_TtsPlaying, g_HoverTarget
+  g_TtsPlaying := false
+  g_HoverTarget := ""
+  SetTimer(CheckTtsHover, 0)
   guiObj.Destroy()
   A_Clipboard := g_OldClip
 }
@@ -1035,12 +1299,12 @@ Gui_Close(guiObj, *)
   global g_OldClip, g_IsChineseMode
   g_OldClip := ClipboardAll()
   A_Clipboard := ""
-  
+
   ; 先尝试复制当前选中的文字
   Send("^c")
   ClipWait(0.3)
   text := Trim(A_Clipboard)
-  
+
   ; 如果没有选中文字，则全选
   if (text = "") {
     Send("^a")
@@ -1053,11 +1317,11 @@ Gui_Close(guiObj, *)
     }
     text := Trim(A_Clipboard)
   }
-  
+
   if (text = "") {
     A_Clipboard := g_OldClip
     return
   }
-  
+
   ShowMainGui(text)
 }
