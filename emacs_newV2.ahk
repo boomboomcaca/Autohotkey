@@ -1,4 +1,4 @@
-﻿#Requires AutoHotkey v2.0
+#Requires AutoHotkey v2.0
 
 ;;;;;;;;;使用管理员权限;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 if !A_IsAdmin {
@@ -625,7 +625,6 @@ global ; V1toV2: Made function global
   WinMove(TargetX, TargetY, , , ActiveWindowTitle) ; Move the window to the calculated coordinates.
 return
 } ; V1toV2: Added closing brace for [^!down]
-
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; Ollama 翻译/纠错 - Ctrl+Alt+Enter: 中文→翻译英文，英文→纠正表达
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -641,7 +640,16 @@ g_CorrectLabelCtrl := ""
 g_TranslateLabelCtrl := ""
 g_IsChineseMode := false
 g_SelectedResult := "translate"
-g_PendingText := ""
+g_OrigEditCtrl := ""
+
+; 异步 HTTP 对象
+g_HttpCorrect := ""
+g_HttpTranslate := ""
+g_CorrectPending := false
+g_TranslatePending := false
+g_CorrectRequested := false
+g_TranslateRequested := false
+g_CurrentText := ""
 
 OllamaCall(prompt)
 {
@@ -704,7 +712,15 @@ OllamaCorrect(text, isChinese)
 ShowMainGui(original)
 {
   global g_OriginalText, g_TranslateResult, g_CorrectResult, g_OldClip, g_MainGui
-  global g_TranslateEditCtrl, g_CorrectEditCtrl, g_CorrectLabelCtrl, g_TranslateLabelCtrl, g_IsChineseMode, g_SelectedResult
+  global g_TranslateEditCtrl, g_CorrectEditCtrl, g_CorrectLabelCtrl, g_TranslateLabelCtrl, g_OrigEditCtrl, g_IsChineseMode, g_SelectedResult
+  
+    ; 如果已有窗口存在，先关闭
+  if (g_MainGui != "") {
+    try {
+      g_MainGui.Destroy()
+    }
+    g_MainGui := ""
+  }
   
   g_OriginalText := original
   g_TranslateResult := ""
@@ -727,60 +743,219 @@ ShowMainGui(original)
   g_MainGui := Gui("+AlwaysOnTop -MinimizeBox", title)
   g_MainGui.SetFont("s10", "Microsoft YaHei")
   
-  g_MainGui.AddText("w500", "原文:")
-  origEdit := g_MainGui.AddEdit("w500 h60 ReadOnly", original)
+  g_MainGui.AddText("w500", "原文 (可编辑):")
+  g_OrigEditCtrl := g_MainGui.AddEdit("w500 h60", original)
   
   if g_IsChineseMode {
     ; 中文：翻译在前
     g_TranslateLabelCtrl := g_MainGui.AddText("w500", "✓ " . translateLabel)
     g_TranslateEditCtrl := g_MainGui.AddEdit("w500 h60 ReadOnly", "正在翻译...")
     g_CorrectLabelCtrl := g_MainGui.AddText("w500", "   " . correctLabel)
-    g_CorrectEditCtrl := g_MainGui.AddEdit("w500 h60 ReadOnly", "正在纠错...")
+    g_CorrectEditCtrl := g_MainGui.AddEdit("w500 h60 ReadOnly", "(切换后加载)")
     g_SelectedResult := "translate"
   } else {
     ; 英文：纠错在前
     g_CorrectLabelCtrl := g_MainGui.AddText("w500", "✓ " . correctLabel)
     g_CorrectEditCtrl := g_MainGui.AddEdit("w500 h60 ReadOnly", "正在纠错...")
     g_TranslateLabelCtrl := g_MainGui.AddText("w500", "   " . translateLabel)
-    g_TranslateEditCtrl := g_MainGui.AddEdit("w500 h60 ReadOnly", "正在翻译...")
+    g_TranslateEditCtrl := g_MainGui.AddEdit("w500 h60 ReadOnly", "(切换后加载)")
     g_SelectedResult := "correct"
   }
   
-  g_MainGui.AddText("w500 cGray", "Tab 切换 | Enter 替换 | Esc 取消")
+  g_MainGui.AddText("w500 cGray", "Ctrl+Tab 切换 | Enter 替换 | Ctrl+Enter 重新处理 | Esc 取消")
   
   g_MainGui.OnEvent("Close", Gui_Close)
   g_MainGui.OnEvent("Escape", Gui_Close)
   
   g_MainGui.Show()
-  SendMessage(0xB1, -1, 0, origEdit.Hwnd)
+  
   
   HotIfWinActive("ahk_id " g_MainGui.Hwnd)
   Hotkey("Enter", Gui_Apply.Bind(g_MainGui), "On")
-  Hotkey("Tab", Gui_ToggleSelect, "On")
+  Hotkey("NumpadEnter", Gui_Apply.Bind(g_MainGui), "On")
+  Hotkey("^Enter", Gui_Retry, "On")
+  Hotkey("^NumpadEnter", Gui_Retry, "On")
+  Hotkey("^Tab", Gui_ToggleSelect, "On")
   HotIfWinActive()
   
-  ; 直接调用 API
-  text := original
+  ; 重置请求状态并异步调用 API
+  global g_CorrectRequested, g_TranslateRequested
+  g_CorrectRequested := false
+  g_TranslateRequested := false
+  StartAsyncRequests(original, g_SelectedResult)
+}
+
+StartAsyncRequests(text, requestType := "default")
+{
+  global g_HttpCorrect, g_HttpTranslate, g_CorrectPending, g_TranslatePending, g_IsChineseMode
+  global g_CorrectRequested, g_TranslateRequested, g_CurrentText
+  
+  g_CurrentText := text
   isChinese := RegExMatch(text, "[\x{4e00}-\x{9fff}]")
   
-  ; 纠错
-  correctResult := OllamaCorrect(text, isChinese)
-  if (correctResult != "" && correctResult != "解析失败" && !InStr(correctResult, "请求失败"))
-    UpdateCorrectResult(correctResult)
-  else
-    UpdateCorrectResult("纠错失败: " . correctResult)
+  ; 确定要请求哪个
+  if (requestType = "default") {
+    g_CorrectRequested := false
+    g_TranslateRequested := false
+    if isChinese
+      requestType := "translate"
+    else
+      requestType := "correct"
+  }
   
-  ; 翻译
-  translateResult := OllamaTranslate(text, isChinese)
-  if (translateResult != "" && translateResult != "解析失败" && !InStr(translateResult, "请求失败"))
-    UpdateTranslateResult(translateResult)
+  if (requestType = "correct" && !g_CorrectRequested) {
+    if isChinese
+      correctPrompt := "/no_think You are a Chinese language tutor. Correct and improve the following Chinese text. Fix grammar, punctuation, and improve expression while keeping the original meaning. Output only the corrected text without any explanation:`n" . text
+    else
+      correctPrompt := "/no_think You are an English language tutor. Correct and improve the following English text. Fix grammar, spelling, punctuation, and improve expression while keeping the original meaning. Output only the corrected text without any explanation:`n" . text
+    g_HttpCorrect := StartAsyncHttp(correctPrompt)
+    g_CorrectPending := true
+    g_CorrectRequested := true
+  }
+  
+  if (requestType = "translate" && !g_TranslateRequested) {
+    if isChinese
+      translatePrompt := "/no_think Translate to English. Keep the exact same formatting, including punctuation marks, line breaks, and spacing. Output only the translation:`n" . text
+    else
+      translatePrompt := "/no_think Translate to Chinese. Keep the exact same formatting, including punctuation marks, line breaks, and spacing. Output only the translation:`n" . text
+    g_HttpTranslate := StartAsyncHttp(translatePrompt)
+    g_TranslatePending := true
+    g_TranslateRequested := true
+  }
+  
+  ; 启动轮询定时器
+  SetTimer(CheckAsyncResults, 100)
+}
+
+StartAsyncHttp(prompt)
+{
+  prompt := StrReplace(prompt, "\", "\\")
+  prompt := StrReplace(prompt, "`"", "\`"")
+  prompt := StrReplace(prompt, "`n", "\n")
+  prompt := StrReplace(prompt, "`r", "\r")
+  prompt := StrReplace(prompt, "`t", "\t")
+  json := "{`"model`":`"qwen3:latest`",`"prompt`":`"" . prompt . "`",`"stream`":false,`"options`":{`"temperature`":0,`"num_predict`":2048}}"
+  
+  try {
+    http := ComObject("WinHttp.WinHttpRequest.5.1")
+    http.Open("POST", "http://localhost:11434/api/generate", true)  ; true = 异步
+    http.SetRequestHeader("Content-Type", "application/json; charset=utf-8")
+    http.Send(json)
+    return http
+  } catch {
+    return ""
+  }
+}
+
+CheckAsyncResults()
+{
+  global g_HttpCorrect, g_HttpTranslate, g_CorrectPending, g_TranslatePending
+  
+  ; 检查纠错结果
+  if (g_CorrectPending && g_HttpCorrect != "") {
+    try {
+      if (g_HttpCorrect.Status > 0) {
+        response := g_HttpCorrect.ResponseText
+        result := ParseOllamaResponse(response)
+        if (result != "" && result != "解析失败")
+          UpdateCorrectResult(result)
+        else
+          UpdateCorrectResult("纠错失败")
+        g_CorrectPending := false
+      }
+    }
+  }
+  
+  ; 检查翻译结果
+  if (g_TranslatePending && g_HttpTranslate != "") {
+    try {
+      if (g_HttpTranslate.Status > 0) {
+        response := g_HttpTranslate.ResponseText
+        result := ParseOllamaResponse(response)
+        if (result != "" && result != "解析失败")
+          UpdateTranslateResult(result)
+        else
+          UpdateTranslateResult("翻译失败")
+        g_TranslatePending := false
+      }
+    }
+  }
+  
+  ; 如果都完成了，停止定时器
+  if (!g_CorrectPending && !g_TranslatePending) {
+    SetTimer(CheckAsyncResults, 0)
+  }
+}
+
+ParseOllamaResponse(response)
+{
+  if RegExMatch(response, "`"response`"\s*:\s*`"(.*?)`"(?=\s*,\s*`")", &m)
+    result := m[1]
   else
-    UpdateTranslateResult("翻译失败: " . translateResult)
+    return "解析失败"
+  
+  result := StrReplace(result, "\n", "`n")
+  result := StrReplace(result, "\r", "`r")
+  result := StrReplace(result, "\t", "`t")
+  result := StrReplace(result, "\`"", "`"")
+  result := StrReplace(result, "\\", "\")
+  
+  result := RegExReplace(result, "s)<think>.*?</think>", "")
+  result := StrReplace(result, "/think")
+  result := StrReplace(result, "/no_think")
+  
+  return Trim(result)
+}
+
+Gui_Retry(*)
+{
+  global g_OrigEditCtrl, g_TranslateEditCtrl, g_CorrectEditCtrl, g_IsChineseMode
+  global g_CorrectLabelCtrl, g_TranslateLabelCtrl, g_SelectedResult
+  global g_CorrectRequested, g_TranslateRequested, g_TranslateResult, g_CorrectResult
+  
+  ; 重置请求状态
+  g_CorrectRequested := false
+  g_TranslateRequested := false
+  g_TranslateResult := ""
+  g_CorrectResult := ""
+  
+  newText := Trim(g_OrigEditCtrl.Value)
+  if (newText = "")
+    return
+  
+  g_IsChineseMode := RegExMatch(newText, "[\x{4e00}-\x{9fff}]")
+  
+  if g_IsChineseMode {
+    correctLabel := "纠错 (中文润色):"
+    translateLabel := "翻译 (中→英):"
+    g_TranslateLabelCtrl.Text := "✓ " . translateLabel
+    g_CorrectLabelCtrl.Text := "   " . correctLabel
+    g_SelectedResult := "translate"
+  } else {
+    correctLabel := "纠错 (英文润色):"
+    translateLabel := "翻译 (英→中):"
+    g_CorrectLabelCtrl.Text := "✓ " . correctLabel
+    g_TranslateLabelCtrl.Text := "   " . translateLabel
+    g_SelectedResult := "correct"
+  }
+  
+  ; 只显示当前选中的加载状态
+  if (g_SelectedResult = "translate") {
+    g_TranslateEditCtrl.Value := "正在翻译..."
+    g_CorrectEditCtrl.Value := "(切换后加载)"
+  } else {
+    g_CorrectEditCtrl.Value := "正在纠错..."
+    g_TranslateEditCtrl.Value := "(切换后加载)"
+  }
+  
+  StartAsyncRequests(newText, g_SelectedResult)
 }
 
 Gui_ToggleSelect(*)
 {
   global g_SelectedResult, g_CorrectLabelCtrl, g_TranslateLabelCtrl, g_IsChineseMode
+  global g_CorrectRequested, g_TranslateRequested, g_CurrentText
+  global g_CorrectEditCtrl, g_TranslateEditCtrl
   
   if (g_IsChineseMode) {
     correctLabel := "纠错 (中文润色):"
@@ -794,10 +969,20 @@ Gui_ToggleSelect(*)
     g_SelectedResult := "translate"
     g_CorrectLabelCtrl.Text := "   " . correctLabel
     g_TranslateLabelCtrl.Text := "✓ " . translateLabel
+    ; 按需请求翻译
+    if (!g_TranslateRequested) {
+      g_TranslateEditCtrl.Value := "正在翻译..."
+      StartAsyncRequests(g_CurrentText, "translate")
+    }
   } else {
     g_SelectedResult := "correct"
     g_CorrectLabelCtrl.Text := "✓ " . correctLabel
     g_TranslateLabelCtrl.Text := "   " . translateLabel
+    ; 按需请求纠错
+    if (!g_CorrectRequested) {
+      g_CorrectEditCtrl.Value := "正在纠错..."
+      StartAsyncRequests(g_CurrentText, "correct")
+    }
   }
 }
 
@@ -845,21 +1030,30 @@ Gui_Close(guiObj, *)
 }
 
 ^!Enter::
+^!NumpadEnter::
 {
   global g_OldClip, g_IsChineseMode
   g_OldClip := ClipboardAll()
   A_Clipboard := ""
   
-  Send("^a")
-  Sleep(50)
+  ; 先尝试复制当前选中的文字
   Send("^c")
-  Errorlevel := !ClipWait(2)
-  if ErrorLevel {
-    A_Clipboard := g_OldClip
-    return
+  ClipWait(0.3)
+  text := Trim(A_Clipboard)
+  
+  ; 如果没有选中文字，则全选
+  if (text = "") {
+    Send("^a")
+    Sleep(50)
+    Send("^c")
+    Errorlevel := !ClipWait(2)
+    if ErrorLevel {
+      A_Clipboard := g_OldClip
+      return
+    }
+    text := Trim(A_Clipboard)
   }
   
-  text := Trim(A_Clipboard)
   if (text = "") {
     A_Clipboard := g_OldClip
     return
