@@ -758,9 +758,11 @@ ShowMainGui(original)
   }
   
   if g_IsChineseMode {
-    ; 中文：翻译在前
-    g_TranslateLabelCtrl := g_MainGui.AddText("w500", "✓ " . translateLabel)
-    g_TranslateEditCtrl := g_MainGui.AddEdit("w500 h60 ReadOnly", "正在翻译...")
+    ; 中文：翻译在前，添加朗读图标
+    g_TranslateLabelCtrl := g_MainGui.AddText("w120 Section", "✓ " . translateLabel)
+    g_TtsTranslateCtrl := g_MainGui.AddText("x+5 ys cGray", "🔊")
+    g_TtsTranslateCtrl.OnEvent("Click", Gui_PlayTranslate)
+    g_TranslateEditCtrl := g_MainGui.AddEdit("xm w500 h60 ReadOnly", "正在翻译...")
     g_CorrectLabelCtrl := g_MainGui.AddText("w500", "   " . correctLabel)
     g_CorrectEditCtrl := g_MainGui.AddEdit("w500 h60 ReadOnly", "(切换后加载)")
     g_SelectedResult := "translate"
@@ -799,9 +801,8 @@ ShowMainGui(original)
   g_TranslateRequested := false
   StartAsyncRequests(original, g_SelectedResult)
   
-  ; 英文模式启动悬停检测定时器
-  if !g_IsChineseMode
-    SetTimer(CheckTtsHover, 200)
+  ; 启动悬停检测定时器（两种模式都需要）
+  SetTimer(CheckTtsHover, 200)
 }
 
 StartAsyncRequests(text, requestType := "default")
@@ -812,7 +813,7 @@ StartAsyncRequests(text, requestType := "default")
   g_CurrentText := text
   isChinese := RegExMatch(text, "[\x{4e00}-\x{9fff}]")
   
-  ; 确定要请求哪个
+  ; 初始请求：按界面顺序，中文先翻译，英文先纠错
   if (requestType = "default") {
     g_CorrectRequested := false
     g_TranslateRequested := false
@@ -869,6 +870,8 @@ StartAsyncHttp(prompt)
 CheckAsyncResults()
 {
   global g_HttpCorrect, g_HttpTranslate, g_CorrectPending, g_TranslatePending
+  global g_IsChineseMode, g_CorrectRequested, g_TranslateRequested, g_CurrentText
+  global g_CorrectEditCtrl, g_TranslateEditCtrl
   
   ; 检查纠错结果
   if (g_CorrectPending && g_HttpCorrect != "") {
@@ -881,6 +884,12 @@ CheckAsyncResults()
         else
           UpdateCorrectResult("纠错失败")
         g_CorrectPending := false
+        
+        ; 英文模式：纠错完成后自动开始翻译
+        if (!g_IsChineseMode && !g_TranslateRequested) {
+          g_TranslateEditCtrl.Value := "正在翻译..."
+          StartAsyncRequests(g_CurrentText, "translate")
+        }
       }
     }
   }
@@ -896,6 +905,12 @@ CheckAsyncResults()
         else
           UpdateTranslateResult("翻译失败")
         g_TranslatePending := false
+        
+        ; 中文模式：翻译完成后自动开始纠错
+        if (g_IsChineseMode && !g_CorrectRequested) {
+          g_CorrectEditCtrl.Value := "正在纠错..."
+          StartAsyncRequests(g_CurrentText, "correct")
+        }
       }
     }
   }
@@ -1184,8 +1199,8 @@ CheckTtsHover()
   global g_MainGui, g_TtsPlaying, g_IsChineseMode, g_HoverTarget
   static lastHoverCtrl := ""
 
-  ; 如果窗口已关闭或中文模式，停止定时器
-  if (g_MainGui = "" || g_IsChineseMode) {
+  ; 如果窗口已关闭，停止定时器
+  if (g_MainGui = "") {
     SetTimer(CheckTtsHover, 0)
     return
   }
@@ -1194,9 +1209,10 @@ CheckTtsHover()
   currentHover := ""
   try {
     MouseGetPos(&mx, &my, &winUnder, &ctrlUnder, 2)
-    if (ctrlUnder = g_TtsOrigCtrl.Hwnd)
+    ; 中文模式只有翻译图标，英文模式有三个图标
+    if (!g_IsChineseMode && ctrlUnder = g_TtsOrigCtrl.Hwnd)
       currentHover := "orig"
-    else if (ctrlUnder = g_TtsCorrectCtrl.Hwnd)
+    else if (!g_IsChineseMode && ctrlUnder = g_TtsCorrectCtrl.Hwnd)
       currentHover := "correct"
     else if (ctrlUnder = g_TtsTranslateCtrl.Hwnd)
       currentHover := "translate"
@@ -1226,7 +1242,7 @@ PlayTtsLoop()
   global g_OrigEditCtrl, g_CorrectEditCtrl, g_TranslateEditCtrl
   static tempFile := ""
 
-  if (!g_TtsPlaying || g_IsChineseMode || g_HoverTarget = "")
+  if (!g_TtsPlaying || g_HoverTarget = "")
     return
 
   ; 根据悬停目标获取文本
