@@ -653,6 +653,14 @@ g_CurrentText := ""
 g_TtsPlaying := false
 g_HoverTarget := ""
 
+; 流式响应相关
+g_StreamFileCorrect := ""
+g_StreamFileTranslate := ""
+g_StreamPidCorrect := 0
+g_StreamPidTranslate := 0
+g_StreamContentCorrect := ""
+g_StreamContentTranslate := ""
+
 OllamaCall(prompt)
 {
   ; 构建 JSON
@@ -828,7 +836,7 @@ StartAsyncRequests(text, requestType := "default")
       correctPrompt := "/no_think You are a Chinese language tutor. Correct and improve the following Chinese text. Fix grammar, punctuation, and improve expression while keeping the original meaning. Output only the corrected text without any explanation:`n" . text
     else
       correctPrompt := "/no_think You are an English language tutor. Correct and improve the following English text. Fix grammar, spelling, punctuation, and improve expression while keeping the original meaning. Output only the corrected text without any explanation:`n" . text
-    g_HttpCorrect := StartAsyncHttp(correctPrompt)
+    g_HttpCorrect := StartAsyncHttp(correctPrompt, "correct")
     g_CorrectPending := true
     g_CorrectRequested := true
   }
@@ -838,7 +846,7 @@ StartAsyncRequests(text, requestType := "default")
       translatePrompt := "/no_think Translate to English. Keep the exact same formatting, including punctuation marks, line breaks, and spacing. Output only the translation:`n" . text
     else
       translatePrompt := "/no_think Translate to Chinese. Keep the exact same formatting, including punctuation marks, line breaks, and spacing. Output only the translation:`n" . text
-    g_HttpTranslate := StartAsyncHttp(translatePrompt)
+    g_HttpTranslate := StartAsyncHttp(translatePrompt, "translate")
     g_TranslatePending := true
     g_TranslateRequested := true
   }
@@ -847,70 +855,123 @@ StartAsyncRequests(text, requestType := "default")
   SetTimer(CheckAsyncResults, 100)
 }
 
-StartAsyncHttp(prompt)
+StartAsyncHttp(prompt, requestType)
 {
+  global g_StreamFileCorrect, g_StreamFileTranslate, g_StreamPidCorrect, g_StreamPidTranslate
+  global g_StreamContentCorrect, g_StreamContentTranslate
+  
+  ; 转义 prompt 用于 JSON
   prompt := StrReplace(prompt, "\", "\\")
   prompt := StrReplace(prompt, "`"", "\`"")
   prompt := StrReplace(prompt, "`n", "\n")
   prompt := StrReplace(prompt, "`r", "\r")
   prompt := StrReplace(prompt, "`t", "\t")
-  json := "{`"model`":`"qwen3:latest`",`"prompt`":`"" . prompt . "`",`"stream`":false,`"options`":{`"temperature`":0,`"num_predict`":2048}}"
   
+  ; 设置临时文件
+  if (requestType = "correct") {
+    g_StreamFileCorrect := A_Temp . "\ollama_stream_correct.txt"
+    g_StreamContentCorrect := ""
+    streamFile := g_StreamFileCorrect
+    jsonFile := A_Temp . "\ollama_request_correct.json"
+  } else {
+    g_StreamFileTranslate := A_Temp . "\ollama_stream_translate.txt"
+    g_StreamContentTranslate := ""
+    streamFile := g_StreamFileTranslate
+    jsonFile := A_Temp . "\ollama_request_translate.json"
+  }
+  
+  ; 删除旧文件
+  try FileDelete(streamFile)
+  try FileDelete(jsonFile)
+  
+  ; 构建 JSON (使用流式)
+  json := '{"model":"qwen3:latest","prompt":"' . prompt . '","stream":true,"options":{"temperature":0,"num_predict":2048}}'
+  
+  ; 将 JSON 写入临时文件
   try {
-    http := ComObject("WinHttp.WinHttpRequest.5.1")
-    http.Open("POST", "http://localhost:11434/api/generate", true)  ; true = 异步
-    http.SetRequestHeader("Content-Type", "application/json; charset=utf-8")
-    http.Send(json)
-    return http
+    FileAppend(json, jsonFile, "UTF-8")
   } catch {
-    return ""
+    return 0
+  }
+  
+  ; 使用 PowerShell 发起流式请求并写入文件（使用共享写入模式）
+  psScript := ""
+  . "$body = Get-Content -Path '" . jsonFile . "' -Raw -Encoding UTF8;"
+  . "$utf8 = [System.Text.Encoding]::UTF8;"
+  . "$bytes = $utf8.GetBytes($body);"
+  . "$req = [System.Net.HttpWebRequest]::Create('http://localhost:11434/api/generate');"
+  . "$req.Method = 'POST';"
+  . "$req.ContentType = 'application/json';"
+  . "$req.ContentLength = $bytes.Length;"
+  . "$reqStream = $req.GetRequestStream();"
+  . "$reqStream.Write($bytes, 0, $bytes.Length);"
+  . "$reqStream.Close();"
+  . "$resp = $req.GetResponse();"
+  . "$reader = New-Object System.IO.StreamReader($resp.GetResponseStream());"
+  . "$fs = New-Object System.IO.FileStream('" . streamFile . "', [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite);"
+  . "$sw = New-Object System.IO.StreamWriter($fs, [System.Text.Encoding]::UTF8);"
+  . "while(-not $reader.EndOfStream) {"
+  . "  $line = $reader.ReadLine();"
+  . "  $sw.WriteLine($line);"
+  . "  $sw.Flush();"
+  . "}"
+  . "$sw.Close();"
+  . "$fs.Close();"
+  . "$reader.Close();"
+  . "$resp.Close();"
+  
+  ; 启动 PowerShell 进程
+  try {
+    Run('powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "' . psScript . '"', , "Hide", &outPid)
+    if (requestType = "correct")
+      g_StreamPidCorrect := outPid
+    else
+      g_StreamPidTranslate := outPid
+    return outPid
+  } catch {
+    return 0
   }
 }
 
 CheckAsyncResults()
 {
-  global g_HttpCorrect, g_HttpTranslate, g_CorrectPending, g_TranslatePending
+  global g_CorrectPending, g_TranslatePending
   global g_IsChineseMode, g_CorrectRequested, g_TranslateRequested, g_CurrentText
   global g_CorrectEditCtrl, g_TranslateEditCtrl
+  global g_StreamFileCorrect, g_StreamFileTranslate
+  global g_StreamContentCorrect, g_StreamContentTranslate
+  global g_StreamPidCorrect, g_StreamPidTranslate
   
-  ; 检查纠错结果
-  if (g_CorrectPending && g_HttpCorrect != "") {
-    try {
-      if (g_HttpCorrect.Status > 0) {
-        response := g_HttpCorrect.ResponseText
-        result := ParseOllamaResponse(response)
-        if (result != "" && result != "解析失败")
-          UpdateCorrectResult(result)
-        else
-          UpdateCorrectResult("纠错失败")
-        g_CorrectPending := false
-        
-        ; 英文模式：纠错完成后自动开始翻译
-        if (!g_IsChineseMode && !g_TranslateRequested) {
-          g_TranslateEditCtrl.Value := "正在翻译..."
-          StartAsyncRequests(g_CurrentText, "translate")
-        }
+  ; 检查纠错结果（检测 done:true）
+  if (g_CorrectPending && g_StreamFileCorrect != "") {
+    if (IsStreamComplete(g_StreamFileCorrect)) {
+      Sleep(200)
+      result := ReadStreamFile(g_StreamFileCorrect, &g_StreamContentCorrect)
+      if (result != "") {
+        UpdateCorrectResult(result)
+      }
+      g_CorrectPending := false
+      ; 英文模式：纠错完成后自动开始翻译
+      if (!g_IsChineseMode && !g_TranslateRequested) {
+        g_TranslateEditCtrl.Value := "正在翻译..."
+        StartAsyncRequests(g_CurrentText, "translate")
       }
     }
   }
   
-  ; 检查翻译结果
-  if (g_TranslatePending && g_HttpTranslate != "") {
-    try {
-      if (g_HttpTranslate.Status > 0) {
-        response := g_HttpTranslate.ResponseText
-        result := ParseOllamaResponse(response)
-        if (result != "" && result != "解析失败")
-          UpdateTranslateResult(result)
-        else
-          UpdateTranslateResult("翻译失败")
-        g_TranslatePending := false
-        
-        ; 中文模式：翻译完成后自动开始纠错
-        if (g_IsChineseMode && !g_CorrectRequested) {
-          g_CorrectEditCtrl.Value := "正在纠错..."
-          StartAsyncRequests(g_CurrentText, "correct")
-        }
+  ; 检查翻译结果（检测 done:true）
+  if (g_TranslatePending && g_StreamFileTranslate != "") {
+    if (IsStreamComplete(g_StreamFileTranslate)) {
+      Sleep(200)
+      result := ReadStreamFile(g_StreamFileTranslate, &g_StreamContentTranslate)
+      if (result != "") {
+        UpdateTranslateResult(result)
+      }
+      g_TranslatePending := false
+      ; 中文模式：翻译完成后自动开始纠错
+      if (g_IsChineseMode && !g_CorrectRequested) {
+        g_CorrectEditCtrl.Value := "正在纠错..."
+        StartAsyncRequests(g_CurrentText, "correct")
       }
     }
   }
@@ -921,24 +982,70 @@ CheckAsyncResults()
   }
 }
 
-ParseOllamaResponse(response)
+IsStreamComplete(filePath)
 {
-  if RegExMatch(response, "`"response`"\s*:\s*`"(.*?)`"(?=\s*,\s*`")", &m)
-    result := m[1]
-  else
-    return "解析失败"
+  if (!FileExist(filePath))
+    return false
+  try {
+    f := FileOpen(filePath, "r", "UTF-8")
+    if (!f)
+      return false
+    content := f.Read()
+    f.Close()
+    return InStr(content, '"done":true')
+  } catch {
+    return false
+  }
+}
+
+ReadStreamFile(filePath, &accumulatedContent)
+{
+  if (!FileExist(filePath))
+    return ""
   
-  result := StrReplace(result, "\n", "`n")
-  result := StrReplace(result, "\r", "`r")
-  result := StrReplace(result, "\t", "`t")
-  result := StrReplace(result, "\`"", "`"")
-  result := StrReplace(result, "\\", "\")
+  try {
+    ; 使用共享读取模式打开文件
+    f := FileOpen(filePath, "r", "UTF-8")
+    if (!f)
+      return accumulatedContent
+    content := f.Read()
+    f.Close()
+  } catch {
+    return accumulatedContent
+  }
   
+  ; 解析流式 JSON 行 - 使用正则表达式
+  result := ""
+  Loop Parse, content, "`n", "`r"
+  {
+    line := Trim(A_LoopField)
+    if (line = "")
+      continue
+    ; 使用正则提取 response 字段
+    if RegExMatch(line, '"response":"([^"]*)"', &m) {
+      token := m[1]
+      ; 反转义
+      token := StrReplace(token, "\\n", "`n")
+      token := StrReplace(token, "\\r", "`r")
+      token := StrReplace(token, "\\t", "`t")
+      token := StrReplace(token, "\`"", "`"")
+      token := StrReplace(token, "\\\\", "\")
+      result .= token
+    }
+  }
+  
+  ; 清理 think 标签
   result := RegExReplace(result, "s)<think>.*?</think>", "")
-  result := StrReplace(result, "/think")
-  result := StrReplace(result, "/no_think")
+  result := StrReplace(result, "<think>", "")
+  result := StrReplace(result, "</think>", "")
+  result := StrReplace(result, "/think", "")
+  result := StrReplace(result, "/no_think", "")
+  result := Trim(result)
   
-  return Trim(result)
+  if (result != "")
+    accumulatedContent := result
+  
+  return accumulatedContent
 }
 
 Gui_Retry(*)
@@ -1302,6 +1409,21 @@ PlayTtsLoop()
 Gui_Close(guiObj, *)
 {
   global g_OldClip, g_TtsPlaying, g_HoverTarget
+  global g_StreamPidCorrect, g_StreamPidTranslate, g_CorrectPending, g_TranslatePending
+  
+  ; 终止正在运行的 PowerShell 进程
+  if (g_StreamPidCorrect > 0) {
+    try ProcessClose(g_StreamPidCorrect)
+    g_StreamPidCorrect := 0
+  }
+  if (g_StreamPidTranslate > 0) {
+    try ProcessClose(g_StreamPidTranslate)
+    g_StreamPidTranslate := 0
+  }
+  g_CorrectPending := false
+  g_TranslatePending := false
+  SetTimer(CheckAsyncResults, 0)
+  
   g_TtsPlaying := false
   g_HoverTarget := ""
   SetTimer(CheckTtsHover, 0)
