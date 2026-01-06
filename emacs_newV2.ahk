@@ -951,15 +951,17 @@ CheckAsyncResults()
         UpdateCorrectResult(result)
       }
       g_CorrectPending := false
-      ; 英文模式：纠错完成后自动开始翻译
-      if (!g_IsChineseMode && !g_TranslateRequested) {
-        g_TranslateEditCtrl.Value := "正在翻译..."
+      ; 
+      if (!g_IsChineseMode && !g_TranslateRequested && g_TranslateEditCtrl != "") {
+        try {
+          g_TranslateEditCtrl.Value := "正在翻译..."
+        }
         StartAsyncRequests(g_CurrentText, "translate")
       }
     }
   }
   
-  ; 检查翻译结果（检测 done:true）
+  ; 
   if (g_TranslatePending && g_StreamFileTranslate != "") {
     if (IsStreamComplete(g_StreamFileTranslate)) {
       Sleep(200)
@@ -969,8 +971,10 @@ CheckAsyncResults()
       }
       g_TranslatePending := false
       ; 中文模式：翻译完成后自动开始纠错
-      if (g_IsChineseMode && !g_CorrectRequested) {
-        g_CorrectEditCtrl.Value := "正在纠错..."
+      if (g_IsChineseMode && !g_CorrectRequested && g_CorrectEditCtrl != "") {
+        try {
+          g_CorrectEditCtrl.Value := "正在纠错..."
+        }
         StartAsyncRequests(g_CurrentText, "correct")
       }
     }
@@ -1131,22 +1135,37 @@ UpdateTranslateResult(result)
 {
   global g_TranslateResult, g_TranslateEditCtrl
   g_TranslateResult := result
-  if (g_TranslateEditCtrl != "")
-    g_TranslateEditCtrl.Value := result
+  if (g_TranslateEditCtrl != "") {
+    try {
+      g_TranslateEditCtrl.Value := result
+    } catch {
+      g_TranslateEditCtrl := ""
+    }
+  }
 }
 
 UpdateCorrectResult(result)
 {
   global g_CorrectResult, g_CorrectEditCtrl
   g_CorrectResult := result
-  if (g_CorrectEditCtrl != "")
-    g_CorrectEditCtrl.Value := result
+  if (g_CorrectEditCtrl != "") {
+    try {
+      g_CorrectEditCtrl.Value := result
+    } catch {
+      g_CorrectEditCtrl := ""
+    }
+  }
 }
 
 Gui_Apply(guiObj, *)
 {
   global g_TranslateResult, g_CorrectResult, g_OldClip, g_SelectedResult
+  global g_MainGui, g_TranslateEditCtrl, g_CorrectEditCtrl, g_OrigEditCtrl
   guiObj.Destroy()
+  g_MainGui := ""
+  g_TranslateEditCtrl := ""
+  g_CorrectEditCtrl := ""
+  g_OrigEditCtrl := ""
   
   result := (g_SelectedResult = "translate") ? g_TranslateResult : g_CorrectResult
   
@@ -1410,6 +1429,7 @@ Gui_Close(guiObj, *)
 {
   global g_OldClip, g_TtsPlaying, g_HoverTarget
   global g_StreamPidCorrect, g_StreamPidTranslate, g_CorrectPending, g_TranslatePending
+  global g_MainGui, g_TranslateEditCtrl, g_CorrectEditCtrl, g_OrigEditCtrl
   
   ; 终止正在运行的 PowerShell 进程
   if (g_StreamPidCorrect > 0) {
@@ -1428,6 +1448,10 @@ Gui_Close(guiObj, *)
   g_HoverTarget := ""
   SetTimer(CheckTtsHover, 0)
   guiObj.Destroy()
+  g_MainGui := ""
+  g_TranslateEditCtrl := ""
+  g_CorrectEditCtrl := ""
+  g_OrigEditCtrl := ""
   A_Clipboard := g_OldClip
 }
 
