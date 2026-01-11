@@ -128,7 +128,7 @@ ShowMainGui(original)
     translateLabel := "翻译 (英→中):"
   }
   
-  g_MainGui := Gui("+AlwaysOnTop -MinimizeBox", title)
+  g_MainGui := Gui("+AlwaysOnTop", title)
   g_MainGui.SetFont("s10", "Microsoft YaHei")
   
   ; 英文模式显示朗读图标
