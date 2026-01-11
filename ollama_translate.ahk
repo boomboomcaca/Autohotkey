@@ -147,7 +147,7 @@ ShowMainGui(original)
     g_TranslateLabelCtrl := g_MainGui.AddText("w120 Section", "✓ " . translateLabel)
     g_TtsTranslateCtrl := g_MainGui.AddText("x+5 ys cGray", "🔊")
     g_TtsTranslateCtrl.OnEvent("Click", Gui_PlayTranslate)
-    g_TranslateEditCtrl := g_MainGui.AddEdit("xm w500 h80 ReadOnly", "正在处理...")
+    g_TranslateEditCtrl := g_MainGui.AddEdit("xm w500 h100 ReadOnly", "正在处理...")
     g_CorrectLabelCtrl := g_MainGui.AddText("w500", "   " . correctLabel)
     g_CorrectEditCtrl := g_MainGui.AddEdit("w500 h60 ReadOnly", "正在处理...")
     g_SelectedResult := "translate"
@@ -163,7 +163,7 @@ ShowMainGui(original)
     g_TranslateLabelCtrl := g_MainGui.AddText("w120 Section", "   " . translateLabel)
     g_TtsTranslateCtrl := g_MainGui.AddText("x+5 ys cGray", "🔊")
     g_TtsTranslateCtrl.OnEvent("Click", Gui_PlayTranslate)
-    g_TranslateEditCtrl := g_MainGui.AddEdit("xm w500 h80 ReadOnly", "正在处理...")
+    g_TranslateEditCtrl := g_MainGui.AddEdit("xm w500 h100 ReadOnly", "正在处理...")
     g_SelectedResult := "correct"
   }
   
@@ -521,6 +521,8 @@ Gui_ToggleSelect(*)
 UpdateTranslateResult(result)
 {
   global g_TranslateResult, g_TranslateEditCtrl, g_MainGui
+  ; 去除翻译结果中的反斜杠
+  result := StrReplace(result, "\", "")
   g_TranslateResult := result
   if (g_TranslateEditCtrl != "") {
     try {
@@ -571,6 +573,8 @@ UpdateCorrectResult(result)
         corrected := firstLine
     }
     corrected := Trim(corrected)
+    ; 去除纠错文本中的反斜杠
+    corrected := StrReplace(corrected, "\", "")
     g_CorrectedText := corrected
     
     if (g_CorrectEditCtrl != "") {
@@ -589,6 +593,8 @@ UpdateCorrectResult(result)
     }
   } else {
     ; 中文模式或无分隔符：直接显示
+    ; 去除反斜杠
+    result := StrReplace(result, "\", "")
     g_CorrectedText := result
     if (g_CorrectEditCtrl != "") {
       try {
