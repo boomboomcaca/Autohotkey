@@ -147,7 +147,7 @@ ShowMainGui(original)
     g_TranslateLabelCtrl := g_MainGui.AddText("w120 Section", "✓ " . translateLabel)
     g_TtsTranslateCtrl := g_MainGui.AddText("x+5 ys cGray", "🔊")
     g_TtsTranslateCtrl.OnEvent("Click", Gui_PlayTranslate)
-    g_TranslateEditCtrl := g_MainGui.AddEdit("xm w500 h100 ReadOnly", "正在处理...")
+    g_TranslateEditCtrl := g_MainGui.AddEdit("xm w500 h120 ReadOnly", "正在处理...")
     g_CorrectLabelCtrl := g_MainGui.AddText("w500", "   " . correctLabel)
     g_CorrectEditCtrl := g_MainGui.AddEdit("w500 h60 ReadOnly", "正在处理...")
     g_SelectedResult := "translate"
@@ -163,7 +163,7 @@ ShowMainGui(original)
     g_TranslateLabelCtrl := g_MainGui.AddText("w120 Section", "   " . translateLabel)
     g_TtsTranslateCtrl := g_MainGui.AddText("x+5 ys cGray", "🔊")
     g_TtsTranslateCtrl.OnEvent("Click", Gui_PlayTranslate)
-    g_TranslateEditCtrl := g_MainGui.AddEdit("xm w500 h100 ReadOnly", "正在处理...")
+    g_TranslateEditCtrl := g_MainGui.AddEdit("xm w500 h40 ReadOnly", "正在处理...")
     g_SelectedResult := "correct"
   }
   
