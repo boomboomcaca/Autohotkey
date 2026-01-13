@@ -189,7 +189,7 @@ OllamaCall(prompt)
   ; 系统提示：强制禁用 Markdown 和符号
   sysPrompt := "纯文本输出，不要用任何符号（如反斜杠、星号、井号）包裹或强调单词。"
   
-  json := "{`"model`":`"huihui_ai/qwen3-abliterated:8b-v2`",`"system`":`"" . sysPrompt . "`",`"prompt`":`"" . prompt . "`",`"stream`":false,`"options`":{`"temperature`":0,`"num_predict`":1024}}"
+  json := "{`"model`":`"huihui_ai/qwen3-abliterated:8b-v2`",`"system`":`"" . sysPrompt . "`",`"prompt`":`"" . prompt . "`",`"stream`":false,`"options`":{`"temperature`":0,`"num_predict`":1024,`"think`":true}}"
   
   try {
     http := ComObject("WinHttp.WinHttpRequest.5.1")
@@ -450,7 +450,7 @@ StartAsyncHttp(prompt, requestType)
   sysPrompt := "纯文本输出，不要用任何符号（如反斜杠、星号、井号）包裹或强调单词。"
   
   ; 构建 JSON (使用流式，添加 system 参数)
-  json := '{"model":"huihui_ai/qwen3-abliterated:8b-v2","system":"' . sysPrompt . '","prompt":"' . prompt . '","stream":true,"options":{"temperature":0,"num_predict":1024}}'
+  json := '{"model":"huihui_ai/qwen3-abliterated:8b-v2","system":"' . sysPrompt . '","prompt":"' . prompt . '","stream":true,"options":{"temperature":0,"num_predict":1024,"think":true}}'
   
   ; 将 JSON 写入临时文件
   try {
@@ -1414,7 +1414,7 @@ StartChatAsync(question)
   try FileDelete(jsonFile)
   
   ; 构建 JSON (使用流式，添加 system 参数)
-  json := '{"model":"huihui_ai/qwen3-abliterated:8b-v2","system":"' . sysPrompt . '","prompt":"' . prompt . '","stream":true,"options":{"temperature":0.7,"num_predict":2048}}'
+  json := '{"model":"huihui_ai/qwen3-abliterated:8b-v2","system":"' . sysPrompt . '","prompt":"' . prompt . '","stream":true,"options":{"temperature":0.7,"num_predict":2048,"think":true}}'
   
   ; 将 JSON 写入临时文件
   try {
