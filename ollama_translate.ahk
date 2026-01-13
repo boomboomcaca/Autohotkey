@@ -286,8 +286,11 @@ StartAsyncHttp(prompt, requestType)
   try FileDelete(streamFile)
   try FileDelete(jsonFile)
   
-  ; 构建 JSON (使用流式)
-  json := '{"model":"qwen3:latest","prompt":"' . prompt . '","stream":true,"options":{"temperature":0,"num_predict":1024}}'
+  ; 系统提示：强制禁用 Markdown
+  sysPrompt := "You are a helpful assistant. IMPORTANT: Never use Markdown formatting in your responses. Do not use ** for bold, * for lists, # for headers, or any other Markdown syntax. Use plain text only."
+  
+  ; 构建 JSON (使用流式，添加 system 参数)
+  json := '{"model":"qwen3:latest","system":"' . sysPrompt . '","prompt":"' . prompt . '","stream":true,"options":{"temperature":0,"num_predict":1024}}'
   
   ; 将 JSON 写入临时文件
   try {
@@ -585,8 +588,6 @@ Gui_HandleEnter(guiObj, *)
 UpdateTranslateResult(result)
 {
   global g_TranslateResult, g_TranslateEditCtrl, g_MainGui
-  ; 去除翻译结果中的反斜杠
-  result := StrReplace(result, "\", "")
   g_TranslateResult := result
   if (g_TranslateEditCtrl != "") {
     try {
@@ -627,9 +628,6 @@ UpdateCorrectResult(result)
       corrected := result
     }
     
-    ; 去除解释中的反斜杠
-    explanation := StrReplace(explanation, "\", "")
-    
     ; 清理纠正文本（只保留第一行英文句子）
     if (InStr(corrected, "`n")) {
       firstLine := Trim(StrSplit(corrected, "`n")[1])
@@ -637,8 +635,6 @@ UpdateCorrectResult(result)
         corrected := firstLine
     }
     corrected := Trim(corrected)
-    ; 去除纠错文本中的反斜杠
-    corrected := StrReplace(corrected, "\", "")
     g_CorrectedText := corrected
     
     if (g_CorrectEditCtrl != "") {
@@ -657,8 +653,6 @@ UpdateCorrectResult(result)
     }
   } else {
     ; 中文模式或无分隔符：直接显示
-    ; 去除反斜杠
-    result := StrReplace(result, "\", "")
     g_CorrectedText := result
     if (g_CorrectEditCtrl != "") {
       try {
@@ -1063,9 +1057,8 @@ CheckChatResult()
       Sleep(200)
       result := ReadStreamFile(g_StreamFileChat, &g_StreamContentChat)
       if (result != "" && g_AnswerEditCtrl != "") {
-        ; 转换换行符并去除反斜杠
+        ; 转换换行符
         result := StrReplace(result, "\n", "`n")
-        result := StrReplace(result, "\", "")
         try g_AnswerEditCtrl.Value := result
       }
       g_ChatPending := false
