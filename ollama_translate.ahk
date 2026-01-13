@@ -275,7 +275,7 @@ ShowMainGui(original)
     translateLabel := "翻译 (英→中):"
   }
   
-  g_MainGui := Gui("+AlwaysOnTop +E0x02000000", title)  ; WS_EX_COMPOSITED 让窗口有独立位图缓存，解决截图消失问题
+  g_MainGui := Gui("+AlwaysOnTop", title)
   g_MainGui.SetFont("s10", "Microsoft YaHei")
   
   ; ========== 左侧面板：翻译/纠错 ==========
@@ -1159,7 +1159,7 @@ Gui_ManagePrompts(*)
 {
   global g_PromptList, g_PromptNames, g_PromptDropdown, g_SelectedPrompt
   
-  manageGui := Gui("+AlwaysOnTop +E0x02000000", "管理 Prompt 模板")  ; WS_EX_COMPOSITED
+  manageGui := Gui("+AlwaysOnTop", "管理 Prompt 模板")
   manageGui.SetFont("s10", "Microsoft YaHei")
   
   manageGui.AddText("w400", "选择模板:")
@@ -1503,8 +1503,8 @@ Gui_Hide(guiObj, *)
     g_GuiHidden := true
   }
   
-  ; 恢复剪贴板
-  A_Clipboard := g_OldClip
+  ; 不再恢复剪贴板，避免覆盖用户的截图等内容
+  ; A_Clipboard := g_OldClip
 }
 
 Gui_Close(guiObj, *)
@@ -1545,7 +1545,8 @@ Gui_Close(guiObj, *)
   g_AnswerEditCtrl := ""
   g_SendBtnCtrl := ""
   g_PromptDropdown := ""
-  A_Clipboard := g_OldClip
+  ; 不再恢复剪贴板，避免覆盖用户的截图等内容
+  ; A_Clipboard := g_OldClip
 }
 
 !SC029::
