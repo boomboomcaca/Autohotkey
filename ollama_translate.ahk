@@ -1,5 +1,5 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-; Ollama 翻译/纠错 - Ctrl+Alt+Enter: 中文→翻译英文，英文→纠正表达
+; Ollama 翻译/纠错 - Alt+`: 中文→翻译英文，英文→纠正表达 (再按隐藏/显示)
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 g_OriginalText := ""
@@ -172,7 +172,7 @@ ShowMainGui(original)
     g_CorrectLabelCtrl := g_MainGui.AddText("w120 Section", "✓ " . correctLabel)
     g_TtsCorrectCtrl := g_MainGui.AddText("x+5 ys cGray", "🔊")
     g_TtsCorrectCtrl.OnEvent("Click", Gui_PlayCorrect)
-    g_CorrectEditCtrl := g_MainGui.AddEdit("xm w500 h60 ReadOnly", "正在纠错...")
+    g_CorrectEditCtrl := g_MainGui.AddEdit("xm w500 h60 ReadOnly", "正在处理...")
     ; 错误解释框
     g_MainGui.AddText("w500", "错误解释:")
     g_ExplainEditCtrl := g_MainGui.AddEdit("w500 h100 ReadOnly", "")
@@ -192,10 +192,9 @@ ShowMainGui(original)
   g_AnswerEditCtrl := g_MainGui.AddEdit("xs w400 h240 ReadOnly", "")
   
   ; ========== 底部提示 ==========
-  g_MainGui.AddText("xm w930 cGray", "Tab 切换输入框 | Ctrl+Tab 切换结果焦点 | Enter 替换/发送 | Ctrl+Enter 强制替换 | Alt+`` 切换窗口 | Esc 隐藏")
+  g_MainGui.AddText("xm w930 cGray", "Tab 切换输入框 | Ctrl+Tab 切换结果焦点 | Enter 替换/发送 | Ctrl+Enter 强制替换 | Alt+`` 隐藏/显示")
   
   g_MainGui.OnEvent("Close", Gui_Hide)
-  g_MainGui.OnEvent("Escape", Gui_Hide)
   
   ; 窗口创建后暂不显示，等待 AI 响应后再显示
   ; g_MainGui.Show()
@@ -234,6 +233,17 @@ StartAsyncRequests(text, requestType := "default")
 {
   global g_HttpCorrect, g_CorrectPending, g_TranslatePending, g_IsChineseMode
   global g_CorrectRequested, g_TranslateRequested, g_CurrentText
+  global g_StreamPidCorrect, g_StreamPidTranslate
+  
+  ; 终止之前正在运行的请求
+  if (g_StreamPidCorrect > 0) {
+    try ProcessClose(g_StreamPidCorrect)
+    g_StreamPidCorrect := 0
+  }
+  if (g_StreamPidTranslate > 0) {
+    try ProcessClose(g_StreamPidTranslate)
+    g_StreamPidTranslate := 0
+  }
   
   g_CurrentText := text
   isChinese := RegExMatch(text, "[\x{4e00}-\x{9fff}]")
@@ -516,10 +526,10 @@ Gui_Retry(*)
   
   ; 只显示当前选中的加载状态
   if (g_SelectedResult = "translate") {
-    g_TranslateEditCtrl.Value := "正在翻译..."
+    g_TranslateEditCtrl.Value := "正在处理..."
     g_CorrectEditCtrl.Value := "(切换后加载)"
   } else {
-    g_CorrectEditCtrl.Value := "正在纠错..."
+    g_CorrectEditCtrl.Value := "正在处理..."
     g_TranslateEditCtrl.Value := "(切换后加载)"
   }
   
@@ -952,13 +962,6 @@ Gui_SendQuestion(*)
   if (question = "")
     return
   
-  ; 如果有正在进行的请求，先停止
-  if (g_ChatPending && g_StreamPidChat > 0) {
-    SetTimer(CheckChatResult, 0)
-    try ProcessClose(g_StreamPidChat)
-    g_StreamPidChat := 0
-  }
-  
   ; 禁用发送按钮
   g_SendBtnCtrl.Enabled := false
   g_AnswerEditCtrl.Value := "正在思考..."
@@ -971,7 +974,13 @@ Gui_SendQuestion(*)
 
 StartChatAsync(question)
 {
-  global g_StreamFileChat, g_StreamPidChat, g_StreamContentChat
+  global g_StreamFileChat, g_StreamPidChat, g_StreamContentChat, g_ChatPending
+  
+  ; 终止之前正在运行的 Chat 请求
+  if (g_StreamPidChat > 0) {
+    try ProcessClose(g_StreamPidChat)
+    g_StreamPidChat := 0
+  }
   
   ; 转义 prompt 用于 JSON
   prompt := "/no_think " . question
@@ -1129,26 +1138,70 @@ Gui_Close(guiObj, *)
 
 !SC029::
 {
-  global g_MainGui, g_GuiHidden
-  if (g_MainGui = "")
-    return
+  global g_MainGui, g_GuiHidden, g_OldClip, g_OrigEditCtrl, g_OriginalText, g_SelectedResult
   
-  if (g_GuiHidden) {
-    ; 窗口已隐藏，恢复显示
+  ; 窗口已显示 → 隐藏到后台
+  if (g_MainGui != "" && !g_GuiHidden) {
+    g_MainGui.Hide()
+    g_GuiHidden := true
+    return
+  }
+  
+  ; 窗口已隐藏 → 复制文本 + 恢复显示
+  if (g_MainGui != "" && g_GuiHidden) {
+    ; 复制选中文本
+    g_OldClip := ClipboardAll()
+    A_Clipboard := ""
+    Send("^c")
+    ClipWait(0.3)
+    text := Trim(A_Clipboard)
+    
+    ; 如果没有选中文字，则全选
+    if (text = "") {
+      Send("^a")
+      Sleep(50)
+      Send("^c")
+      ClipWait(0.5)
+      text := Trim(A_Clipboard)
+    }
+    
+    ; 更新原文并重新请求
+    if (text != "") {
+      ; 检测语言是否改变
+      newIsChinese := RegExMatch(text, "[\x{4e00}-\x{9fff}]")
+      if (newIsChinese != g_IsChineseMode) {
+        ; 语言模式改变，需要重新创建窗口
+        try g_MainGui.Destroy()
+        g_MainGui := ""
+        ShowMainGui(text)
+        return
+      }
+      
+      ; 语言模式未变，只更新内容
+      global g_CorrectRequested, g_TranslateRequested, g_TranslateEditCtrl, g_CorrectEditCtrl
+      global g_ExplainEditCtrl, g_AnswerEditCtrl
+      g_CorrectRequested := false
+      g_TranslateRequested := false
+      g_OrigEditCtrl.Value := text
+      g_OriginalText := text
+      
+      ; 清空旧结果（包括 AI 回答框）
+      if (g_ExplainEditCtrl != "")
+        try g_ExplainEditCtrl.Value := ""
+      if (g_AnswerEditCtrl != "")
+        try g_AnswerEditCtrl.Value := ""
+      g_TranslateEditCtrl.Value := "正在处理..."
+      g_CorrectEditCtrl.Value := "正在处理..."
+      StartAsyncRequests(text, "default")
+    }
+    
     g_MainGui.Show()
     WinActivate("ahk_id " g_MainGui.Hwnd)
     g_GuiHidden := false
-  } else {
-    ; 隐藏窗口到托盘
-    g_MainGui.Hide()
-    g_GuiHidden := true
+    return
   }
-}
-
-^!Enter::
-^!NumpadEnter::
-{
-  global g_OldClip, g_IsChineseMode
+  
+  ; 窗口不存在 → 复制文本 + 创建窗口
   g_OldClip := ClipboardAll()
   A_Clipboard := ""
 
