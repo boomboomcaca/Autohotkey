@@ -53,7 +53,7 @@ OllamaCall(prompt)
   prompt := StrReplace(prompt, "`n", "\n")
   prompt := StrReplace(prompt, "`r", "\r")
   prompt := StrReplace(prompt, "`t", "\t")
-  json := "{`"model`":`"qwen3:latest`",`"prompt`":`"" . prompt . "`",`"stream`":false,`"options`":{`"temperature`":0,`"num_predict`":2048}}"
+  json := "{`"model`":`"qwen3:latest`",`"prompt`":`"" . prompt . "`",`"stream`":false,`"options`":{`"temperature`":0,`"num_predict`":1024}}"
   
   try {
     http := ComObject("WinHttp.WinHttpRequest.5.1")
@@ -287,7 +287,7 @@ StartAsyncHttp(prompt, requestType)
   try FileDelete(jsonFile)
   
   ; 构建 JSON (使用流式)
-  json := '{"model":"qwen3:latest","prompt":"' . prompt . '","stream":true,"options":{"temperature":0,"num_predict":2048}}'
+  json := '{"model":"qwen3:latest","prompt":"' . prompt . '","stream":true,"options":{"temperature":0,"num_predict":1024}}'
   
   ; 将 JSON 写入临时文件
   try {
