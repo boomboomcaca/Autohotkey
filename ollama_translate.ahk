@@ -976,12 +976,15 @@ StartChatAsync(question)
   global g_StreamFileChat, g_StreamPidChat, g_StreamContentChat
   
   ; 转义 prompt 用于 JSON
-  prompt := "/no_think 请用纯文本回答，不要使用 Markdown 格式（如 **加粗** 或 * 列表）。问题: " . question
+  prompt := "/no_think " . question
   prompt := StrReplace(prompt, "\", "\\")
   prompt := StrReplace(prompt, "`"", "\`"")
   prompt := StrReplace(prompt, "`n", "\n")
   prompt := StrReplace(prompt, "`r", "\r")
   prompt := StrReplace(prompt, "`t", "\t")
+  
+  ; 系统提示：强制禁用 Markdown
+  sysPrompt := "You are a helpful assistant. IMPORTANT: Never use Markdown formatting in your responses. Do not use ** for bold, * for lists, # for headers, or any other Markdown syntax. Use plain text only with simple line breaks and numbered lists like 1. 2. 3."
   
   ; 设置临时文件
   g_StreamFileChat := A_Temp . "\ollama_stream_chat.txt"
@@ -992,8 +995,8 @@ StartChatAsync(question)
   try FileDelete(g_StreamFileChat)
   try FileDelete(jsonFile)
   
-  ; 构建 JSON (使用流式)
-  json := '{"model":"qwen3:latest","prompt":"' . prompt . '","stream":true,"options":{"temperature":0.7,"num_predict":2048}}'
+  ; 构建 JSON (使用流式，添加 system 参数)
+  json := '{"model":"qwen3:latest","system":"' . sysPrompt . '","prompt":"' . prompt . '","stream":true,"options":{"temperature":0.7,"num_predict":2048}}'
   
   ; 将 JSON 写入临时文件
   try {
