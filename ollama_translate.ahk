@@ -192,10 +192,10 @@ ShowMainGui(original)
   g_AnswerEditCtrl := g_MainGui.AddEdit("xs w400 h240 ReadOnly", "")
   
   ; ========== 底部提示 ==========
-  g_MainGui.AddText("xm w930 cGray", "Tab 切换输入框 | Ctrl+Tab 切换结果焦点 | Enter 替换/发送 | Ctrl+Enter 强制替换 | Alt+`` 切换窗口 | Esc 取消")
+  g_MainGui.AddText("xm w930 cGray", "Tab 切换输入框 | Ctrl+Tab 切换结果焦点 | Enter 替换/发送 | Ctrl+Enter 强制替换 | Alt+`` 切换窗口 | Esc 隐藏")
   
-  g_MainGui.OnEvent("Close", Gui_Close)
-  g_MainGui.OnEvent("Escape", Gui_Close)
+  g_MainGui.OnEvent("Close", Gui_Hide)
+  g_MainGui.OnEvent("Escape", Gui_Hide)
   
   ; 窗口创建后暂不显示，等待 AI 响应后再显示
   ; g_MainGui.Show()
@@ -1071,6 +1071,20 @@ CheckChatResult()
       SetTimer(CheckChatResult, 0)
     }
   }
+}
+
+Gui_Hide(guiObj, *)
+{
+  global g_MainGui, g_GuiHidden, g_OldClip
+  
+  ; 隐藏窗口到后台
+  if (g_MainGui != "") {
+    g_MainGui.Hide()
+    g_GuiHidden := true
+  }
+  
+  ; 恢复剪贴板
+  A_Clipboard := g_OldClip
 }
 
 Gui_Close(guiObj, *)
