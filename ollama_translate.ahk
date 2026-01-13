@@ -57,7 +57,7 @@ OllamaCall(prompt)
   ; 系统提示：强制禁用 Markdown
   sysPrompt := "You are a helpful assistant. IMPORTANT: Never use Markdown formatting in your responses. Do not use ** for bold, * for lists, # for headers, or any other Markdown syntax. Use plain text only."
   
-  json := "{`"model`":`"qwen3:latest`",`"system`":`"" . sysPrompt . "`",`"prompt`":`"" . prompt . "`",`"stream`":false,`"options`":{`"temperature`":0,`"num_predict`":1024}}"
+  json := "{`"model`":`"huihui_ai/qwen3-abliterated:8b-v2`",`"system`":`"" . sysPrompt . "`",`"prompt`":`"" . prompt . "`",`"stream`":false,`"options`":{`"temperature`":0,`"num_predict`":1024}}"
   
   try {
     http := ComObject("WinHttp.WinHttpRequest.5.1")
@@ -304,7 +304,7 @@ StartAsyncHttp(prompt, requestType)
   sysPrompt := "You are a helpful assistant. IMPORTANT: Never use Markdown formatting in your responses. Do not use ** for bold, * for lists, # for headers, or any other Markdown syntax. Use plain text only."
   
   ; 构建 JSON (使用流式，添加 system 参数)
-  json := '{"model":"qwen3:latest","system":"' . sysPrompt . '","prompt":"' . prompt . '","stream":true,"options":{"temperature":0,"num_predict":1024}}'
+  json := '{"model":"huihui_ai/qwen3-abliterated:8b-v2","system":"' . sysPrompt . '","prompt":"' . prompt . '","stream":true,"options":{"temperature":0,"num_predict":1024}}'
   
   ; 将 JSON 写入临时文件
   try {
@@ -1003,7 +1003,7 @@ StartChatAsync(question)
   try FileDelete(jsonFile)
   
   ; 构建 JSON (使用流式，添加 system 参数)
-  json := '{"model":"qwen3:latest","system":"' . sysPrompt . '","prompt":"' . prompt . '","stream":true,"options":{"temperature":0.7,"num_predict":2048}}'
+  json := '{"model":"huihui_ai/qwen3-abliterated:8b-v2","system":"' . sysPrompt . '","prompt":"' . prompt . '","stream":true,"options":{"temperature":0.7,"num_predict":2048}}'
   
   ; 将 JSON 写入临时文件
   try {
