@@ -1149,21 +1149,12 @@ Gui_Close(guiObj, *)
   
   ; 窗口已隐藏 → 复制文本 + 恢复显示
   if (g_MainGui != "" && g_GuiHidden) {
-    ; 复制选中文本
+    ; 复制选中文本（不自动全选）
     g_OldClip := ClipboardAll()
     A_Clipboard := ""
     Send("^c")
     ClipWait(0.3)
     text := Trim(A_Clipboard)
-    
-    ; 如果没有选中文字，则全选
-    if (text = "") {
-      Send("^a")
-      Sleep(50)
-      Send("^c")
-      ClipWait(0.5)
-      text := Trim(A_Clipboard)
-    }
     
     ; 更新原文并重新请求
     if (text != "") {
@@ -1201,24 +1192,34 @@ Gui_Close(guiObj, *)
     return
   }
   
-  ; 窗口不存在 → 复制文本 + 创建窗口
+  ; 窗口不存在 → 复制文本 + 创建窗口（不自动全选）
   g_OldClip := ClipboardAll()
   A_Clipboard := ""
 
-  ; 先尝试复制当前选中的文字
+  ; 只复制选中的文字，不自动全选
   Send("^c")
   ClipWait(0.3)
   text := Trim(A_Clipboard)
 
-  ; 如果没有选中文字，则全选
-  if (text = "") {
-    Send("^a")
-    Sleep(50)
-    Send("^c")
-    ClipWait(0.5)
-    text := Trim(A_Clipboard)
-  }
-
   ; 即使文本为空也显示窗口（可使用 AI 助手）
+  ShowMainGui(text)
+}
+
+; Ctrl+Alt+Enter: 自动全选 + 翻译
+^!Enter::
+^!NumpadEnter::
+{
+  global g_OldClip
+  g_OldClip := ClipboardAll()
+  A_Clipboard := ""
+
+  ; 自动全选并复制
+  Send("^a")
+  Sleep(50)
+  Send("^c")
+  ClipWait(0.5)
+  text := Trim(A_Clipboard)
+
+  ; 即使文本为空也显示窗口
   ShowMainGui(text)
 }
