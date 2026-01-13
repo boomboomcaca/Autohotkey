@@ -26,6 +26,7 @@ g_CurrentText := ""
 g_TtsPlaying := false
 g_HoverTarget := ""
 g_PendingShowGui := false
+g_GuiHidden := false
 
 ; 流式响应相关
 g_StreamFileCorrect := ""
@@ -187,7 +188,7 @@ ShowMainGui(original)
   g_AnswerEditCtrl := g_MainGui.AddEdit("xs w400 h240 ReadOnly", "")
   
   ; ========== 底部提示 ==========
-  g_MainGui.AddText("xm w930 cGray", "Tab 切换输入框 | Ctrl+Tab 切换结果焦点 | Enter 替换/发送 | Ctrl+Enter 强制替换 | Esc 取消")
+  g_MainGui.AddText("xm w930 cGray", "Tab 切换输入框 | Ctrl+Tab 切换结果焦点 | Enter 替换/发送 | Ctrl+Enter 强制替换 | Alt+`` 切换窗口 | Esc 取消")
   
   g_MainGui.OnEvent("Close", Gui_Close)
   g_MainGui.OnEvent("Escape", Gui_Close)
@@ -1110,6 +1111,24 @@ Gui_Close(guiObj, *)
   g_AnswerEditCtrl := ""
   g_SendBtnCtrl := ""
   A_Clipboard := g_OldClip
+}
+
+!SC029::
+{
+  global g_MainGui, g_GuiHidden
+  if (g_MainGui = "")
+    return
+  
+  if (g_GuiHidden) {
+    ; 窗口已隐藏，恢复显示
+    g_MainGui.Show()
+    WinActivate("ahk_id " g_MainGui.Hwnd)
+    g_GuiHidden := false
+  } else {
+    ; 隐藏窗口到托盘
+    g_MainGui.Hide()
+    g_GuiHidden := true
+  }
 }
 
 ^!Enter::
