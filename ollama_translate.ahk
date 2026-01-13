@@ -35,6 +35,15 @@ g_StreamPidTranslate := 0
 g_StreamContentCorrect := ""
 g_StreamContentTranslate := ""
 
+; AI 问答相关
+g_QuestionEditCtrl := ""
+g_AnswerEditCtrl := ""
+g_SendBtnCtrl := ""
+g_ChatPending := false
+g_StreamFileChat := ""
+g_StreamPidChat := 0
+g_StreamContentChat := ""
+
 OllamaCall(prompt)
 {
   ; 构建 JSON
@@ -99,6 +108,7 @@ ShowMainGui(original)
   global g_TranslateEditCtrl, g_CorrectEditCtrl, g_CorrectLabelCtrl, g_TranslateLabelCtrl, g_OrigEditCtrl, g_IsChineseMode, g_SelectedResult
   global g_TtsOrigCtrl, g_TtsCorrectCtrl, g_TtsTranslateCtrl
   global g_ExplainEditCtrl, g_CorrectedText
+  global g_QuestionEditCtrl, g_AnswerEditCtrl, g_SendBtnCtrl
   
     ; 如果已有窗口存在，先关闭
   if (g_MainGui != "") {
@@ -131,6 +141,7 @@ ShowMainGui(original)
   g_MainGui := Gui("+AlwaysOnTop", title)
   g_MainGui.SetFont("s10", "Microsoft YaHei")
   
+  ; ========== 左侧面板：翻译/纠错 ==========
   ; 英文模式显示朗读图标
   if !g_IsChineseMode {
     g_MainGui.AddText("w120 Section", "原文 (可编辑):")
@@ -167,7 +178,16 @@ ShowMainGui(original)
     g_SelectedResult := "correct"
   }
   
-  g_MainGui.AddText("w500 cGray", "Ctrl+Tab 切换 | Enter 替换 | Ctrl+Enter 重新处理 | Esc 取消")
+  ; ========== 右侧面板：AI 问答 ==========
+  g_MainGui.AddText("x530 y10 w400 Section", "AI 助手:")
+  g_QuestionEditCtrl := g_MainGui.AddEdit("xs w330 h60", "")
+  g_SendBtnCtrl := g_MainGui.AddButton("x+5 yp h60 w60", "发送")
+  g_SendBtnCtrl.OnEvent("Click", Gui_SendQuestion)
+  g_MainGui.AddText("xs w400", "回答:")
+  g_AnswerEditCtrl := g_MainGui.AddEdit("xs w400 h240 ReadOnly", "")
+  
+  ; ========== 底部提示 ==========
+  g_MainGui.AddText("xm w930 cGray", "Tab 切换输入框 | Ctrl+Tab 切换结果焦点 | Enter 替换/发送 | Ctrl+Enter 强制替换 | Esc 取消")
   
   g_MainGui.OnEvent("Close", Gui_Close)
   g_MainGui.OnEvent("Escape", Gui_Close)
@@ -176,19 +196,33 @@ ShowMainGui(original)
   ; g_MainGui.Show()
   
   HotIfWinActive("ahk_id " g_MainGui.Hwnd)
-  Hotkey("Enter", Gui_Apply.Bind(g_MainGui), "On")
-  Hotkey("NumpadEnter", Gui_Apply.Bind(g_MainGui), "On")
-  Hotkey("^Enter", Gui_Retry, "On")
-  Hotkey("^NumpadEnter", Gui_Retry, "On")
+  Hotkey("Enter", Gui_HandleEnter.Bind(g_MainGui), "On")
+  Hotkey("NumpadEnter", Gui_HandleEnter.Bind(g_MainGui), "On")
+  Hotkey("^Enter", Gui_Apply.Bind(g_MainGui), "On")
+  Hotkey("^NumpadEnter", Gui_Apply.Bind(g_MainGui), "On")
   Hotkey("^Tab", Gui_ToggleSelect, "On")
+  Hotkey("Tab", Gui_ToggleFocus, "On")
   HotIfWinActive()
   
   ; 重置请求状态并异步调用 API
   global g_CorrectRequested, g_TranslateRequested, g_PendingShowGui
   g_CorrectRequested := false
   g_TranslateRequested := false
-  g_PendingShowGui := true  ; 标记需要在收到响应后显示窗口
-  StartAsyncRequests(original, g_SelectedResult)
+  
+  ; 直接显示窗口，不等待 AI 响应
+  g_PendingShowGui := false
+  if (original = "") {
+    g_TranslateEditCtrl.Value := ""
+    g_CorrectEditCtrl.Value := ""
+  }
+  g_MainGui.Show()
+  g_QuestionEditCtrl.Focus()
+  SetTimer(CheckTtsHover, 200)
+  
+  ; 有原文时启动异步请求
+  if (original != "") {
+    StartAsyncRequests(original, g_SelectedResult)
+  }
 }
 
 StartAsyncRequests(text, requestType := "default")
@@ -207,10 +241,10 @@ StartAsyncRequests(text, requestType := "default")
     
     if isChinese {
       ; 中文：润色 + 翻译成英文
-      combinedPrompt := "/no_think 请对以下中文进行润色和翻译。`n`n输出格式(严格遵守):`n===CORRECT===`n润色后的中文`n===TRANSLATE===`n英文翻译`n`n原文: " . text
+      combinedPrompt := "/no_think 请对以下中文进行润色和翻译。不要使用Markdown格式。`n`n输出格式(严格遵守):`n===CORRECT===`n润色后的中文`n===TRANSLATE===`n英文翻译`n`n原文: " . text
     } else {
       ; 英文：纠错+解释 + 翻译成中文
-      combinedPrompt := "/no_think Correct and translate this English text for a Chinese learner.`n`nOutput format (strict, no backslashes):`n===CORRECT===`nCorrected sentence`n---`n错误1: 原文 → 修正 (中文解释，不要用反斜杠)`n===TRANSLATE===`n中文翻译`n`nExample:`n===CORRECT===`nI am going home.`n---`n错误1: i → I (句首字母大写)`n错误2: gohome → going home (需要空格)`n===TRANSLATE===`n我要回家了。`n`nText: " . text
+      combinedPrompt := "/no_think Correct and translate this English text for a Chinese learner. Do not use Markdown formatting.`n`nOutput format (strict, no backslashes, plain text only):`n===CORRECT===`nCorrected sentence`n---`n错误1: 原文 → 修正 (中文解释)`n===TRANSLATE===`n中文翻译`n`nExample:`n===CORRECT===`nI am going home.`n---`n错误1: i → I (句首字母大写)`n错误2: gohome → going home (需要空格)`n===TRANSLATE===`n我要回家了。`n`nText: " . text
     }
     
     g_HttpCorrect := StartAsyncHttp(combinedPrompt, "correct")
@@ -328,10 +362,11 @@ CheckAsyncResults()
     SetTimer(CheckAsyncResults, 0)
     
     ; 收到响应后显示窗口
-    global g_PendingShowGui, g_MainGui
+    global g_PendingShowGui, g_MainGui, g_QuestionEditCtrl
     if (g_PendingShowGui && g_MainGui != "") {
       g_PendingShowGui := false
       g_MainGui.Show()
+      g_QuestionEditCtrl.Focus()
       ; 启动悬停检测定时器
       SetTimer(CheckTtsHover, 200)
     }
@@ -487,7 +522,7 @@ Gui_ToggleSelect(*)
 {
   global g_SelectedResult, g_CorrectLabelCtrl, g_TranslateLabelCtrl, g_IsChineseMode
   global g_CorrectRequested, g_TranslateRequested, g_CurrentText
-  global g_CorrectEditCtrl, g_TranslateEditCtrl
+  global g_CorrectEditCtrl, g_TranslateEditCtrl, g_AnswerEditCtrl
   
   if (g_IsChineseMode) {
     correctLabel := "纠错 (中文润色):"
@@ -497,24 +532,52 @@ Gui_ToggleSelect(*)
     translateLabel := "翻译 (英→中):"
   }
   
-  if (g_SelectedResult = "correct") {
-    g_SelectedResult := "translate"
-    g_CorrectLabelCtrl.Text := "   " . correctLabel
-    g_TranslateLabelCtrl.Text := "✓ " . translateLabel
-    ; 按需请求翻译
-    if (!g_TranslateRequested) {
-      g_TranslateEditCtrl.Value := "正在翻译..."
-      StartAsyncRequests(g_CurrentText, "translate")
-    }
-  } else {
+  ; 获取当前焦点控件
+  focusedHwnd := ControlGetFocus("A")
+  
+  ; 在翻译、纠错、AI回答三个结果框之间循环切换焦点
+  if (focusedHwnd = g_TranslateEditCtrl.Hwnd) {
+    g_CorrectEditCtrl.Focus()
     g_SelectedResult := "correct"
     g_CorrectLabelCtrl.Text := "✓ " . correctLabel
     g_TranslateLabelCtrl.Text := "   " . translateLabel
-    ; 按需请求纠错
-    if (!g_CorrectRequested) {
-      g_CorrectEditCtrl.Value := "正在纠错..."
-      StartAsyncRequests(g_CurrentText, "correct")
-    }
+  } else if (focusedHwnd = g_CorrectEditCtrl.Hwnd) {
+    g_AnswerEditCtrl.Focus()
+  } else {
+    g_TranslateEditCtrl.Focus()
+    g_SelectedResult := "translate"
+    g_CorrectLabelCtrl.Text := "   " . correctLabel
+    g_TranslateLabelCtrl.Text := "✓ " . translateLabel
+  }
+}
+
+Gui_ToggleFocus(*)
+{
+  global g_OrigEditCtrl, g_QuestionEditCtrl
+  
+  ; 获取当前焦点控件
+  focusedHwnd := ControlGetFocus("A")
+  
+  ; 在原文输入框和 AI 问题输入框之间切换
+  if (focusedHwnd = g_OrigEditCtrl.Hwnd) {
+    g_QuestionEditCtrl.Focus()
+  } else {
+    g_OrigEditCtrl.Focus()
+  }
+}
+
+Gui_HandleEnter(guiObj, *)
+{
+  global g_OrigEditCtrl, g_QuestionEditCtrl
+  
+  ; 获取当前焦点控件
+  focusedHwnd := ControlGetFocus("A")
+  
+  ; 根据焦点位置决定操作
+  if (focusedHwnd = g_QuestionEditCtrl.Hwnd) {
+    Gui_SendQuestion()
+  } else {
+    Gui_Apply(guiObj)
   }
 }
 
@@ -881,11 +944,140 @@ PlayTtsLoop()
   }
 }
 
+Gui_SendQuestion(*)
+{
+  global g_QuestionEditCtrl, g_AnswerEditCtrl, g_SendBtnCtrl
+  global g_ChatPending, g_StreamFileChat, g_StreamPidChat, g_StreamContentChat
+  
+  question := Trim(g_QuestionEditCtrl.Value)
+  if (question = "")
+    return
+  
+  ; 如果有正在进行的请求，先停止
+  if (g_ChatPending && g_StreamPidChat > 0) {
+    SetTimer(CheckChatResult, 0)
+    try ProcessClose(g_StreamPidChat)
+    g_StreamPidChat := 0
+  }
+  
+  ; 禁用发送按钮
+  g_SendBtnCtrl.Enabled := false
+  g_AnswerEditCtrl.Value := "正在思考..."
+  
+  ; 启动异步请求
+  g_ChatPending := true
+  g_StreamContentChat := ""
+  StartChatAsync(question)
+}
+
+StartChatAsync(question)
+{
+  global g_StreamFileChat, g_StreamPidChat, g_StreamContentChat
+  
+  ; 转义 prompt 用于 JSON
+  prompt := "/no_think 请用纯文本回答，不要使用 Markdown 格式（如 **加粗** 或 * 列表）。问题: " . question
+  prompt := StrReplace(prompt, "\", "\\")
+  prompt := StrReplace(prompt, "`"", "\`"")
+  prompt := StrReplace(prompt, "`n", "\n")
+  prompt := StrReplace(prompt, "`r", "\r")
+  prompt := StrReplace(prompt, "`t", "\t")
+  
+  ; 设置临时文件
+  g_StreamFileChat := A_Temp . "\ollama_stream_chat.txt"
+  g_StreamContentChat := ""
+  jsonFile := A_Temp . "\ollama_request_chat.json"
+  
+  ; 删除旧文件
+  try FileDelete(g_StreamFileChat)
+  try FileDelete(jsonFile)
+  
+  ; 构建 JSON (使用流式)
+  json := '{"model":"qwen3:latest","prompt":"' . prompt . '","stream":true,"options":{"temperature":0.7,"num_predict":2048}}'
+  
+  ; 将 JSON 写入临时文件
+  try {
+    FileAppend(json, jsonFile, "UTF-8")
+  } catch {
+    return
+  }
+  
+  ; 使用 PowerShell 发起流式请求
+  psScript := ""
+  . "$body = Get-Content -Path '" . jsonFile . "' -Raw -Encoding UTF8;"
+  . "$utf8 = [System.Text.Encoding]::UTF8;"
+  . "$bytes = $utf8.GetBytes($body);"
+  . "$req = [System.Net.HttpWebRequest]::Create('http://localhost:11434/api/generate');"
+  . "$req.Method = 'POST';"
+  . "$req.ContentType = 'application/json';"
+  . "$req.ContentLength = $bytes.Length;"
+  . "$reqStream = $req.GetRequestStream();"
+  . "$reqStream.Write($bytes, 0, $bytes.Length);"
+  . "$reqStream.Close();"
+  . "$resp = $req.GetResponse();"
+  . "$reader = New-Object System.IO.StreamReader($resp.GetResponseStream());"
+  . "$fs = New-Object System.IO.FileStream('" . g_StreamFileChat . "', [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite);"
+  . "$sw = New-Object System.IO.StreamWriter($fs, [System.Text.Encoding]::UTF8);"
+  . "while(-not $reader.EndOfStream) {"
+  . "  $line = $reader.ReadLine();"
+  . "  $sw.WriteLine($line);"
+  . "  $sw.Flush();"
+  . "}"
+  . "$sw.Close();"
+  . "$fs.Close();"
+  . "$reader.Close();"
+  . "$resp.Close();"
+  
+  ; 启动 PowerShell 进程
+  try {
+    Run('powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "' . psScript . '"', , "Hide", &outPid)
+    g_StreamPidChat := outPid
+  } catch {
+    return
+  }
+  
+  ; 启动轮询定时器
+  SetTimer(CheckChatResult, 100)
+}
+
+CheckChatResult()
+{
+  global g_ChatPending, g_StreamFileChat, g_StreamContentChat, g_StreamPidChat
+  global g_AnswerEditCtrl, g_SendBtnCtrl
+  
+  if (!g_ChatPending)
+    return
+  
+  ; 检查控件是否已被销毁
+  if (g_AnswerEditCtrl = "" || g_SendBtnCtrl = "") {
+    SetTimer(CheckChatResult, 0)
+    return
+  }
+  
+  ; 检查是否完成
+  if (g_StreamFileChat != "" && FileExist(g_StreamFileChat)) {
+    if (IsStreamComplete(g_StreamFileChat)) {
+      Sleep(200)
+      result := ReadStreamFile(g_StreamFileChat, &g_StreamContentChat)
+      if (result != "" && g_AnswerEditCtrl != "") {
+        ; 转换换行符并去除反斜杠
+        result := StrReplace(result, "\n", "`n")
+        result := StrReplace(result, "\", "")
+        try g_AnswerEditCtrl.Value := result
+      }
+      g_ChatPending := false
+      if (g_SendBtnCtrl != "")
+        try g_SendBtnCtrl.Enabled := true
+      SetTimer(CheckChatResult, 0)
+    }
+  }
+}
+
 Gui_Close(guiObj, *)
 {
   global g_OldClip, g_TtsPlaying, g_HoverTarget
   global g_StreamPidCorrect, g_StreamPidTranslate, g_CorrectPending, g_TranslatePending
   global g_MainGui, g_TranslateEditCtrl, g_CorrectEditCtrl, g_OrigEditCtrl
+  global g_StreamPidChat, g_ChatPending, g_QuestionEditCtrl, g_AnswerEditCtrl, g_SendBtnCtrl
   
   ; 终止正在运行的 PowerShell 进程
   if (g_StreamPidCorrect > 0) {
@@ -896,9 +1088,15 @@ Gui_Close(guiObj, *)
     try ProcessClose(g_StreamPidTranslate)
     g_StreamPidTranslate := 0
   }
+  if (g_StreamPidChat > 0) {
+    try ProcessClose(g_StreamPidChat)
+    g_StreamPidChat := 0
+  }
   g_CorrectPending := false
   g_TranslatePending := false
+  g_ChatPending := false
   SetTimer(CheckAsyncResults, 0)
+  SetTimer(CheckChatResult, 0)
   
   g_TtsPlaying := false
   g_HoverTarget := ""
@@ -908,6 +1106,9 @@ Gui_Close(guiObj, *)
   g_TranslateEditCtrl := ""
   g_CorrectEditCtrl := ""
   g_OrigEditCtrl := ""
+  g_QuestionEditCtrl := ""
+  g_AnswerEditCtrl := ""
+  g_SendBtnCtrl := ""
   A_Clipboard := g_OldClip
 }
 
@@ -928,18 +1129,10 @@ Gui_Close(guiObj, *)
     Send("^a")
     Sleep(50)
     Send("^c")
-    Errorlevel := !ClipWait(2)
-    if ErrorLevel {
-      A_Clipboard := g_OldClip
-      return
-    }
+    ClipWait(0.5)
     text := Trim(A_Clipboard)
   }
 
-  if (text = "") {
-    A_Clipboard := g_OldClip
-    return
-  }
-
+  ; 即使文本为空也显示窗口（可使用 AI 助手）
   ShowMainGui(text)
 }
