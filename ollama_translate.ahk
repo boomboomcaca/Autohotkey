@@ -275,7 +275,7 @@ ShowMainGui(original)
     translateLabel := "翻译 (英→中):"
   }
   
-  g_MainGui := Gui("+AlwaysOnTop", title)
+  g_MainGui := Gui("+AlwaysOnTop +E0x02000000", title)  ; WS_EX_COMPOSITED 让窗口有独立位图缓存，解决截图消失问题
   g_MainGui.SetFont("s10", "Microsoft YaHei")
   
   ; ========== 左侧面板：翻译/纠错 ==========
@@ -1159,7 +1159,7 @@ Gui_ManagePrompts(*)
 {
   global g_PromptList, g_PromptNames, g_PromptDropdown, g_SelectedPrompt
   
-  manageGui := Gui("+AlwaysOnTop", "管理 Prompt 模板")
+  manageGui := Gui("+AlwaysOnTop +E0x02000000", "管理 Prompt 模板")  ; WS_EX_COMPOSITED
   manageGui.SetFont("s10", "Microsoft YaHei")
   
   manageGui.AddText("w400", "选择模板:")
