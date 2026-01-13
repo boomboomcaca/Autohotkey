@@ -45,6 +45,138 @@ g_StreamFileChat := ""
 g_StreamPidChat := 0
 g_StreamContentChat := ""
 
+; Prompt 模板相关
+g_ConfigFile := A_ScriptDir . "\ollama_config.ini"
+g_PromptList := []
+g_PromptNames := []
+g_SelectedPrompt := ""
+g_PromptDropdown := ""
+g_PromptManageBtn := ""
+
+; 初始化 Prompt 模板
+InitPrompts()
+
+InitPrompts()
+{
+  global g_ConfigFile, g_PromptList, g_PromptNames, g_SelectedPrompt
+  
+  ; 如果文件不存在，创建默认配置
+  if (!FileExist(g_ConfigFile)) {
+    defaultConfig := "
+(
+[Settings]
+SelectedPrompt=无
+
+[Prompt_通用助手]
+prompt=你是一个有帮助的助手。请用简洁的中文回答问题。
+
+[Prompt_代码解释]
+prompt=请解释以下代码的功能和工作原理，用中文回答：
+
+[Prompt_翻译助手]
+prompt=请将以下内容翻译成中文，保持原意：
+
+[Prompt_写作润色]
+prompt=请帮我润色以下文字，使其更加流畅自然：
+
+[Prompt_总结摘要]
+prompt=请用简洁的语言总结以下内容的要点：
+)"
+    FileAppend(defaultConfig, g_ConfigFile, "UTF-8")
+  }
+  
+  ; 读取所有 prompt
+  LoadPrompts()
+  
+  ; 从配置文件读取上次选中的模板
+  savedPrompt := ""
+  try savedPrompt := IniRead(g_ConfigFile, "Settings", "SelectedPrompt", "")
+  
+  ; 如果保存的模板存在，使用它；否则使用第一个
+  if (savedPrompt != "" && HasPromptName(savedPrompt))
+    g_SelectedPrompt := savedPrompt
+  else if (g_PromptNames.Length > 0)
+    g_SelectedPrompt := g_PromptNames[1]
+}
+
+LoadPrompts()
+{
+  global g_ConfigFile, g_PromptList, g_PromptNames
+  
+  g_PromptList := []
+  g_PromptNames := []
+  
+  if (!FileExist(g_ConfigFile))
+    return
+  
+  content := FileRead(g_ConfigFile, "UTF-8")
+  currentName := ""
+  currentPrompt := ""
+  
+  Loop Parse, content, "`n", "`r"
+  {
+    line := Trim(A_LoopField)
+    if (line = "")
+      continue
+    
+    ; 检测 section 名称 [Prompt_xxx]，跳过 [Settings]
+    if (RegExMatch(line, "^\[Prompt_(.+)\]$", &m)) {
+      ; 保存上一个（允许空 prompt）
+      if (currentName != "") {
+        g_PromptNames.Push(currentName)
+        g_PromptList.Push({name: currentName, prompt: currentPrompt})
+      }
+      currentName := m[1]
+      currentPrompt := ""
+    } else if (RegExMatch(line, "^prompt=(.*)$", &m) && currentName != "") {
+      currentPrompt := m[1]
+    }
+  }
+  
+  ; 保存最后一个（允许空 prompt）
+  if (currentName != "") {
+    g_PromptNames.Push(currentName)
+    g_PromptList.Push({name: currentName, prompt: currentPrompt})
+  }
+  
+  ; 在列表开头插入"无"选项（如果不存在）
+  if (g_PromptNames.Length = 0 || g_PromptNames[1] != "无") {
+    g_PromptNames.InsertAt(1, "无")
+    g_PromptList.InsertAt(1, {name: "无", prompt: ""})
+  }
+}
+
+SavePrompts()
+{
+  global g_ConfigFile, g_PromptList, g_SelectedPrompt
+  
+  ; 构建配置文件内容：Settings + Prompts
+  content := "[Settings]`n"
+  content .= "SelectedPrompt=" . g_SelectedPrompt . "`n`n"
+  
+  for item in g_PromptList {
+    ; 跳过"无"选项（动态添加的，不需要保存）
+    if (item.name = "无")
+      continue
+    content .= "[Prompt_" . item.name . "]`n"
+    content .= "prompt=" . item.prompt . "`n`n"
+  }
+  
+  try FileDelete(g_ConfigFile)
+  FileAppend(content, g_ConfigFile, "UTF-8")
+}
+
+GetPromptByName(name)
+{
+  global g_PromptList
+  
+  for item in g_PromptList {
+    if (item.name = name)
+      return item.prompt
+  }
+  return ""
+}
+
 OllamaCall(prompt)
 {
   ; 构建 JSON
@@ -54,8 +186,8 @@ OllamaCall(prompt)
   prompt := StrReplace(prompt, "`r", "\r")
   prompt := StrReplace(prompt, "`t", "\t")
   
-  ; 系统提示：强制禁用 Markdown
-  sysPrompt := "You are a helpful assistant. IMPORTANT: Never use Markdown formatting in your responses. Do not use ** for bold, * for lists, # for headers, or any other Markdown syntax. Use plain text only."
+  ; 系统提示：强制禁用 Markdown 和符号
+  sysPrompt := "纯文本输出，不要用任何符号（如反斜杠、星号、井号）包裹或强调单词。"
   
   json := "{`"model`":`"huihui_ai/qwen3-abliterated:8b-v2`",`"system`":`"" . sysPrompt . "`",`"prompt`":`"" . prompt . "`",`"stream`":false,`"options`":{`"temperature`":0,`"num_predict`":1024}}"
   
@@ -92,18 +224,18 @@ OllamaCall(prompt)
 OllamaTranslate(text, isChinese)
 {
   if isChinese
-    prompt := "/no_think Translate to English. Keep the exact same formatting, including punctuation marks, line breaks, and spacing. Output only the translation:`n" . text
+    prompt := "Translate to English. Keep the exact same formatting, including punctuation marks, line breaks, and spacing. Output only the translation:`n" . text
   else
-    prompt := "/no_think Translate to Chinese. Keep the exact same formatting, including punctuation marks, line breaks, and spacing. Output only the translation:`n" . text
+    prompt := "Translate to Chinese. Keep the exact same formatting, including punctuation marks, line breaks, and spacing. Output only the translation:`n" . text
   return OllamaCall(prompt)
 }
 
 OllamaCorrect(text, isChinese)
 {
   if isChinese
-    prompt := "/no_think You are a Chinese language tutor. Correct and improve the following Chinese text. Fix grammar, punctuation, and improve expression while keeping the original meaning. Output only the corrected text without any explanation:`n" . text
+    prompt := "You are a Chinese language tutor. Correct and improve the following Chinese text. Fix grammar, punctuation, and improve expression while keeping the original meaning. Output only the corrected text without any explanation:`n" . text
   else
-    prompt := "/no_think Correct this English text for a Chinese learner.`n`nRules:`n1. First line: ONLY the corrected sentence, nothing else`n2. Second line: exactly three dashes: ---`n3. Then list errors in Chinese: 错误1: 原文 → 修正 (解释)`n`nExample output:`nI am a real team member.`n---`n错误1: i → I (句首字母需要大写)`n错误2: real team → a real team (需要冠词 a)`n`nNow correct: " . text
+    prompt := "Correct this English text for a Chinese learner.`n`nRules:`n1. First line: ONLY the corrected sentence, nothing else`n2. Second line: exactly three dashes: ---`n3. Then list errors in Chinese: 错误1: 原文 → 修正 (解释)`n`nExample output:`nI am a real team member.`n---`n错误1: i → I (句首字母需要大写)`n错误2: real team → a real team (需要冠词 a)`n`nNow correct: " . text
   return OllamaCall(prompt)
 }
 
@@ -175,7 +307,7 @@ ShowMainGui(original)
     g_CorrectEditCtrl := g_MainGui.AddEdit("xm w500 h60 ReadOnly", "正在处理...")
     ; 错误解释框
     g_MainGui.AddText("w500", "错误解释:")
-    g_ExplainEditCtrl := g_MainGui.AddEdit("w500 h100 ReadOnly", "")
+    g_ExplainEditCtrl := g_MainGui.AddEdit("w500 h100 ReadOnly", "正在处理...")
     g_TranslateLabelCtrl := g_MainGui.AddText("w120 Section", "   " . translateLabel)
     g_TtsTranslateCtrl := g_MainGui.AddText("x+5 ys cGray", "🔊")
     g_TtsTranslateCtrl.OnEvent("Click", Gui_PlayTranslate)
@@ -184,12 +316,23 @@ ShowMainGui(original)
   }
   
   ; ========== 右侧面板：AI 问答 ==========
-  g_MainGui.AddText("x530 y10 w400 Section", "AI 助手:")
-  g_QuestionEditCtrl := g_MainGui.AddEdit("xs w330 h60", "")
-  g_SendBtnCtrl := g_MainGui.AddButton("x+5 yp h60 w60", "发送")
+  g_MainGui.AddText("x530 y10 w60 Section", "Prompt:")
+  promptList := ""
+  for name in g_PromptNames {
+    promptList .= (promptList = "" ? "" : "|") . name
+  }
+  g_PromptDropdown := g_MainGui.AddDropDownList("x+5 yp w280", StrSplit(promptList, "|"))
+  if (g_SelectedPrompt != "")
+    g_PromptDropdown.Text := g_SelectedPrompt
+  g_PromptDropdown.OnEvent("Change", Gui_PromptChanged)
+  g_PromptManageBtn := g_MainGui.AddButton("x+5 yp w50", "管理")
+  g_PromptManageBtn.OnEvent("Click", Gui_ManagePrompts)
+  
+  g_QuestionEditCtrl := g_MainGui.AddEdit("xs w330 h50", "")
+  g_SendBtnCtrl := g_MainGui.AddButton("x+5 yp h50 w60", "发送")
   g_SendBtnCtrl.OnEvent("Click", Gui_SendQuestion)
   g_MainGui.AddText("xs w400", "回答:")
-  g_AnswerEditCtrl := g_MainGui.AddEdit("xs w400 h240 ReadOnly", "")
+  g_AnswerEditCtrl := g_MainGui.AddEdit("xs w400 h220 ReadOnly", "")
   
   ; ========== 底部提示 ==========
   g_MainGui.AddText("xm w930 cGray", "Tab 切换输入框 | Ctrl+Tab 切换结果焦点 | Enter 替换/发送 | Ctrl+Enter 强制替换 | Alt+`` 隐藏/显示")
@@ -206,6 +349,7 @@ ShowMainGui(original)
   Hotkey("^NumpadEnter", Gui_Apply.Bind(g_MainGui), "On")
   Hotkey("^Tab", Gui_ToggleSelect, "On")
   Hotkey("Tab", Gui_ToggleFocus, "On")
+  Hotkey("^v", Gui_PasteAsText, "On")
   HotIfWinActive()
   
   ; 重置请求状态并异步调用 API
@@ -218,6 +362,8 @@ ShowMainGui(original)
   if (original = "") {
     g_TranslateEditCtrl.Value := ""
     g_CorrectEditCtrl.Value := ""
+    if (g_ExplainEditCtrl != "")
+      g_ExplainEditCtrl.Value := ""
   }
   g_MainGui.Show()
   g_QuestionEditCtrl.Focus()
@@ -256,10 +402,10 @@ StartAsyncRequests(text, requestType := "default")
     
     if isChinese {
       ; 中文：润色 + 翻译成英文
-      combinedPrompt := "/no_think 请对以下中文进行润色和翻译。不要使用Markdown格式。`n`n输出格式(严格遵守):`n===CORRECT===`n润色后的中文`n===TRANSLATE===`n英文翻译`n`n原文: " . text
+      combinedPrompt := "请对以下中文进行润色和翻译。不要使用Markdown格式。`n`n输出格式(严格遵守):`n===CORRECT===`n润色后的中文`n===TRANSLATE===`n英文翻译`n`n原文: " . text
     } else {
       ; 英文：纠错+解释 + 翻译成中文
-      combinedPrompt := "/no_think Correct and translate this English text for a Chinese learner. Do not use Markdown formatting.`n`nOutput format (strict, no backslashes, plain text only):`n===CORRECT===`nCorrected sentence`n---`n错误1: 原文 → 修正 (中文解释)`n===TRANSLATE===`n中文翻译`n`nExample:`n===CORRECT===`nI am going home.`n---`n错误1: i → I (句首字母大写)`n错误2: gohome → going home (需要空格)`n===TRANSLATE===`n我要回家了。`n`nText: " . text
+      combinedPrompt := "纠正并翻译以下英文。纯文本输出，不要用任何符号包裹单词。`n`n格式：`n===CORRECT===`n纠正后的英文`n---`n错误: 原文 → 修正 (解释)`n===TRANSLATE===`n中文翻译`n`n英文: " . text
     }
     
     g_HttpCorrect := StartAsyncHttp(combinedPrompt, "correct")
@@ -300,8 +446,8 @@ StartAsyncHttp(prompt, requestType)
   try FileDelete(streamFile)
   try FileDelete(jsonFile)
   
-  ; 系统提示：强制禁用 Markdown
-  sysPrompt := "You are a helpful assistant. IMPORTANT: Never use Markdown formatting in your responses. Do not use ** for bold, * for lists, # for headers, or any other Markdown syntax. Use plain text only."
+  ; 系统提示：强制禁用 Markdown 和符号
+  sysPrompt := "纯文本输出，不要用任何符号（如反斜杠、星号、井号）包裹或强调单词。"
   
   ; 构建 JSON (使用流式，添加 system 参数)
   json := '{"model":"huihui_ai/qwen3-abliterated:8b-v2","system":"' . sysPrompt . '","prompt":"' . prompt . '","stream":true,"options":{"temperature":0,"num_predict":1024}}'
@@ -465,15 +611,15 @@ ReadStreamFile(filePath, &accumulatedContent)
     line := Trim(A_LoopField)
     if (line = "")
       continue
-    ; 使用正则提取 response 字段
-    if RegExMatch(line, '"response":"([^"]*)"', &m) {
+    ; 使用正则提取 response 字段（支持转义字符）
+    if RegExMatch(line, '"response":"((?:[^"\\]|\\.)*)"', &m) {
       token := m[1]
-      ; 反转义
-      token := StrReplace(token, "\\n", "`n")
-      token := StrReplace(token, "\\r", "`r")
-      token := StrReplace(token, "\\t", "`t")
-      token := StrReplace(token, "\`"", "`"")
-      token := StrReplace(token, "\\\\", "\")
+      ; 反转义 JSON 字符串
+      token := StrReplace(token, "\n", "`n")
+      token := StrReplace(token, "\r", "`r")
+      token := StrReplace(token, "\t", "`t")
+      token := StrReplace(token, '\"', '"')
+      token := StrReplace(token, "\\", "\")
       result .= token
     }
   }
@@ -495,8 +641,23 @@ ReadStreamFile(filePath, &accumulatedContent)
 Gui_Retry(*)
 {
   global g_OrigEditCtrl, g_TranslateEditCtrl, g_CorrectEditCtrl, g_IsChineseMode
-  global g_CorrectLabelCtrl, g_TranslateLabelCtrl, g_SelectedResult
+  global g_CorrectLabelCtrl, g_TranslateLabelCtrl, g_SelectedResult, g_MainGui
   global g_CorrectRequested, g_TranslateRequested, g_TranslateResult, g_CorrectResult
+  global g_ExplainEditCtrl
+  
+  newText := Trim(g_OrigEditCtrl.Value)
+  if (newText = "")
+    return
+  
+  ; 检测语言是否改变
+  newIsChinese := RegExMatch(newText, "[\x{4e00}-\x{9fff}]")
+  if (newIsChinese != g_IsChineseMode) {
+    ; 语言模式改变，需要重新创建窗口
+    try g_MainGui.Destroy()
+    g_MainGui := ""
+    ShowMainGui(newText)
+    return
+  }
   
   ; 重置请求状态
   g_CorrectRequested := false
@@ -504,36 +665,13 @@ Gui_Retry(*)
   g_TranslateResult := ""
   g_CorrectResult := ""
   
-  newText := Trim(g_OrigEditCtrl.Value)
-  if (newText = "")
-    return
+  ; 所有框都显示正在处理
+  if (g_ExplainEditCtrl != "")
+    try g_ExplainEditCtrl.Value := "正在处理..."
+  g_TranslateEditCtrl.Value := "正在处理..."
+  g_CorrectEditCtrl.Value := "正在处理..."
   
-  g_IsChineseMode := RegExMatch(newText, "[\x{4e00}-\x{9fff}]")
-  
-  if g_IsChineseMode {
-    correctLabel := "纠错 (中文润色):"
-    translateLabel := "翻译 (中→英):"
-    g_TranslateLabelCtrl.Text := "✓ " . translateLabel
-    g_CorrectLabelCtrl.Text := "   " . correctLabel
-    g_SelectedResult := "translate"
-  } else {
-    correctLabel := "纠错 (英文润色):"
-    translateLabel := "翻译 (英→中):"
-    g_CorrectLabelCtrl.Text := "✓ " . correctLabel
-    g_TranslateLabelCtrl.Text := "   " . translateLabel
-    g_SelectedResult := "correct"
-  }
-  
-  ; 只显示当前选中的加载状态
-  if (g_SelectedResult = "translate") {
-    g_TranslateEditCtrl.Value := "正在处理..."
-    g_CorrectEditCtrl.Value := "(切换后加载)"
-  } else {
-    g_CorrectEditCtrl.Value := "正在处理..."
-    g_TranslateEditCtrl.Value := "(切换后加载)"
-  }
-  
-  StartAsyncRequests(newText, g_SelectedResult)
+  StartAsyncRequests(newText, "default")
 }
 
 Gui_ToggleSelect(*)
@@ -569,6 +707,61 @@ Gui_ToggleSelect(*)
   }
 }
 
+Gui_PasteAsText(*)
+{
+  global g_OrigEditCtrl, g_QuestionEditCtrl
+  
+  ; 使用 Windows API 直接获取剪贴板文本（解决 PixPin OCR 延迟渲染问题）
+  clipText := GetClipboardText()
+  
+  if (clipText != "") {
+    ; 获取当前焦点控件
+    focusedHwnd := ControlGetFocus("A")
+    
+    ; 只在可编辑的输入框中粘贴
+    if (focusedHwnd = g_OrigEditCtrl.Hwnd) {
+      g_OrigEditCtrl.Value := clipText
+    } else if (focusedHwnd = g_QuestionEditCtrl.Hwnd) {
+      g_QuestionEditCtrl.Value := clipText
+    }
+  }
+}
+
+GetClipboardText()
+{
+  ; 使用 Windows API 直接获取剪贴板文本
+  ; 这可以触发延迟渲染，解决 PixPin OCR 等软件的兼容性问题
+  
+  CF_UNICODETEXT := 13
+  
+  ; 打开剪贴板
+  if !DllCall("OpenClipboard", "Ptr", 0)
+    return A_Clipboard  ; 回退到 AHK 方式
+  
+  ; 获取 Unicode 文本数据
+  hData := DllCall("GetClipboardData", "UInt", CF_UNICODETEXT, "Ptr")
+  if (!hData) {
+    DllCall("CloseClipboard")
+    return A_Clipboard  ; 回退到 AHK 方式
+  }
+  
+  ; 锁定内存并获取指针
+  pData := DllCall("GlobalLock", "Ptr", hData, "Ptr")
+  if (!pData) {
+    DllCall("CloseClipboard")
+    return A_Clipboard
+  }
+  
+  ; 读取字符串
+  text := StrGet(pData, "UTF-16")
+  
+  ; 解锁并关闭
+  DllCall("GlobalUnlock", "Ptr", hData)
+  DllCall("CloseClipboard")
+  
+  return text
+}
+
 Gui_ToggleFocus(*)
 {
   global g_OrigEditCtrl, g_QuestionEditCtrl
@@ -594,9 +787,10 @@ Gui_HandleEnter(guiObj, *)
   ; 根据焦点位置决定操作
   if (focusedHwnd = g_QuestionEditCtrl.Hwnd) {
     Gui_SendQuestion()
-  } else {
-    Gui_Apply(guiObj)
+  } else if (focusedHwnd = g_OrigEditCtrl.Hwnd) {
+    Gui_Retry()  ; 重新翻译
   }
+  ; 其他情况不做处理
 }
 
 UpdateTranslateResult(result)
@@ -953,6 +1147,215 @@ PlayTtsLoop()
   }
 }
 
+Gui_PromptChanged(ctrl, *)
+{
+  global g_SelectedPrompt
+  g_SelectedPrompt := ctrl.Text
+  ; 保存选中的模板到配置文件
+  SavePrompts()
+}
+
+Gui_ManagePrompts(*)
+{
+  global g_PromptList, g_PromptNames, g_PromptDropdown, g_SelectedPrompt
+  
+  manageGui := Gui("+AlwaysOnTop", "管理 Prompt 模板")
+  manageGui.SetFont("s10", "Microsoft YaHei")
+  
+  manageGui.AddText("w400", "选择模板:")
+  listBox := manageGui.AddListBox("w400 h150", g_PromptNames)
+  if (g_PromptNames.Length > 0)
+    listBox.Choose(1)
+  
+  manageGui.AddText("w400", "模板名称:")
+  nameEdit := manageGui.AddEdit("w400", "")
+  
+  manageGui.AddText("w400", "Prompt 内容:")
+  promptEdit := manageGui.AddEdit("w400 h80", "")
+  
+  ; 选择变化时更新编辑框
+  listBox.OnEvent("Change", (*) => UpdatePromptEdit(listBox, nameEdit, promptEdit))
+  
+  ; 按钮行
+  btnAdd := manageGui.AddButton("w95", "新增")
+  btnSave := manageGui.AddButton("x+10 w95", "保存")
+  btnDelete := manageGui.AddButton("x+10 w95", "删除")
+  btnClose := manageGui.AddButton("x+10 w95", "关闭")
+  
+  btnAdd.OnEvent("Click", (*) => AddPrompt(listBox, nameEdit, promptEdit))
+  btnSave.OnEvent("Click", (*) => SavePromptItem(listBox, nameEdit, promptEdit))
+  btnDelete.OnEvent("Click", (*) => DeletePrompt(listBox, nameEdit, promptEdit))
+  btnClose.OnEvent("Click", (*) => CloseManageGui(manageGui))
+  
+  ; 初始加载第一个
+  if (g_PromptNames.Length > 0)
+    UpdatePromptEdit(listBox, nameEdit, promptEdit)
+  
+  manageGui.Show()
+}
+
+UpdatePromptEdit(listBox, nameEdit, promptEdit)
+{
+  global g_PromptList
+  
+  idx := listBox.Value
+  if (idx > 0 && idx <= g_PromptList.Length) {
+    nameEdit.Value := g_PromptList[idx].name
+    promptEdit.Value := g_PromptList[idx].prompt
+  }
+}
+
+AddPrompt(listBox, nameEdit, promptEdit)
+{
+  global g_PromptList, g_PromptNames, g_PromptDropdown
+  
+  newName := "新模板"
+  newPrompt := ""
+  
+  g_PromptNames.Push(newName)
+  g_PromptList.Push({name: newName, prompt: newPrompt})
+  
+  ; 更新列表
+  listBox.Delete()
+  listBox.Add(g_PromptNames)
+  listBox.Choose(g_PromptNames.Length)
+  
+  nameEdit.Value := newName
+  promptEdit.Value := newPrompt
+  
+  SavePrompts()
+  RefreshPromptDropdown()
+}
+
+SavePromptItem(listBox, nameEdit, promptEdit)
+{
+  global g_PromptList, g_PromptNames, g_PromptDropdown, g_SelectedPrompt
+  
+  idx := listBox.Value
+  if (idx <= 0 || idx > g_PromptList.Length)
+    return
+  
+  newName := Trim(nameEdit.Value)
+  newPrompt := Trim(promptEdit.Value)
+  
+  if (newName = "")
+    return
+  
+  ; 如果修改的是当前选中的，同步更新
+  oldName := g_PromptList[idx].name
+  if (g_SelectedPrompt = oldName)
+    g_SelectedPrompt := newName
+  
+  g_PromptList[idx].name := newName
+  g_PromptList[idx].prompt := newPrompt
+  g_PromptNames[idx] := newName
+  
+  ; 更新列表
+  listBox.Delete()
+  listBox.Add(g_PromptNames)
+  listBox.Choose(idx)
+  
+  SavePrompts()
+  RefreshPromptDropdown()
+}
+
+DeletePrompt(listBox, nameEdit, promptEdit)
+{
+  global g_PromptList, g_PromptNames, g_PromptDropdown, g_SelectedPrompt
+  
+  idx := listBox.Value
+  if (idx <= 0 || idx > g_PromptList.Length)
+    return
+  
+  ; 不能删除"无"选项
+  if (g_PromptList[idx].name = "无") {
+    MsgBox("不能删除[无]选项", "提示", "Icon!")
+    return
+  }
+  
+  ; 至少保留一个（除"无"外）
+  if (g_PromptList.Length <= 2) {
+    MsgBox("至少需要保留一个模板", "提示", "Icon!")
+    return
+  }
+  
+  g_PromptList.RemoveAt(idx)
+  g_PromptNames.RemoveAt(idx)
+  
+  ; 更新列表
+  listBox.Delete()
+  listBox.Add(g_PromptNames)
+  if (idx > g_PromptNames.Length)
+    idx := g_PromptNames.Length
+  listBox.Choose(idx)
+  
+  UpdatePromptEdit(listBox, nameEdit, promptEdit)
+  
+  ; 如果删除的是当前选中的，重置选中
+  if (g_SelectedPrompt != "" && !HasPromptName(g_SelectedPrompt))
+    g_SelectedPrompt := g_PromptNames[1]
+  
+  SavePrompts()
+  RefreshPromptDropdown()
+}
+
+CloseManageGui(manageGui)
+{
+  global g_MainGui, g_OrigEditCtrl
+  
+  ; 保存当前原文
+  currentText := ""
+  if (g_OrigEditCtrl != "")
+    try currentText := g_OrigEditCtrl.Value
+  
+  manageGui.Destroy()
+  ; 重新加载配置
+  LoadPrompts()
+  
+  ; 销毁并重建主界面（最可靠的方法）
+  if (g_MainGui != "") {
+    try g_MainGui.Destroy()
+    g_MainGui := ""
+    ShowMainGui(currentText)
+  }
+}
+
+HasPromptName(name)
+{
+  global g_PromptNames
+  for n in g_PromptNames {
+    if (n = name)
+      return true
+  }
+  return false
+}
+
+RefreshPromptDropdown()
+{
+  global g_PromptDropdown, g_PromptNames, g_SelectedPrompt, g_MainGui
+  
+  if (g_PromptDropdown = "" || g_MainGui = "")
+    return
+  
+  try {
+    ; 检查控件是否有效
+    if (!IsObject(g_PromptDropdown) || !g_PromptDropdown.Hwnd)
+      return
+    
+    ; 使用控件原生方法清空并添加
+    g_PromptDropdown.Delete()
+    g_PromptDropdown.Add(g_PromptNames)
+    
+    ; 设置选中项
+    if (g_SelectedPrompt != "" && HasPromptName(g_SelectedPrompt)) {
+      g_PromptDropdown.Choose(g_SelectedPrompt)
+    } else if (g_PromptNames.Length > 0) {
+      g_SelectedPrompt := g_PromptNames[1]
+      g_PromptDropdown.Choose(1)
+    }
+  }
+}
+
 Gui_SendQuestion(*)
 {
   global g_QuestionEditCtrl, g_AnswerEditCtrl, g_SendBtnCtrl
@@ -975,6 +1378,7 @@ Gui_SendQuestion(*)
 StartChatAsync(question)
 {
   global g_StreamFileChat, g_StreamPidChat, g_StreamContentChat, g_ChatPending
+  global g_SelectedPrompt
   
   ; 终止之前正在运行的 Chat 请求
   if (g_StreamPidChat > 0) {
@@ -982,16 +1386,23 @@ StartChatAsync(question)
     g_StreamPidChat := 0
   }
   
+  ; 获取选中的 prompt 模板
+  selectedPromptText := GetPromptByName(g_SelectedPrompt)
+  if (selectedPromptText != "")
+    fullQuestion := selectedPromptText . "`n`n" . question
+  else
+    fullQuestion := question
+  
   ; 转义 prompt 用于 JSON
-  prompt := "/no_think " . question
+  prompt := fullQuestion
   prompt := StrReplace(prompt, "\", "\\")
   prompt := StrReplace(prompt, "`"", "\`"")
   prompt := StrReplace(prompt, "`n", "\n")
   prompt := StrReplace(prompt, "`r", "\r")
   prompt := StrReplace(prompt, "`t", "\t")
   
-  ; 系统提示：强制禁用 Markdown
-  sysPrompt := "You are a helpful assistant. IMPORTANT: Never use Markdown formatting in your responses. Do not use ** for bold, * for lists, # for headers, or any other Markdown syntax. Use plain text only with simple line breaks and numbered lists like 1. 2. 3."
+  ; 系统提示：强制禁用 Markdown 和符号
+  sysPrompt := "纯文本输出，不要用任何符号（如反斜杠、星号、井号）包裹或强调单词。"
   
   ; 设置临时文件
   g_StreamFileChat := A_Temp . "\ollama_stream_chat.txt"
@@ -1133,6 +1544,7 @@ Gui_Close(guiObj, *)
   g_QuestionEditCtrl := ""
   g_AnswerEditCtrl := ""
   g_SendBtnCtrl := ""
+  g_PromptDropdown := ""
   A_Clipboard := g_OldClip
 }
 
