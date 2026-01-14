@@ -781,6 +781,13 @@ Gui_HandleEnter(guiObj, *)
 {
   global g_OrigEditCtrl, g_QuestionEditCtrl
   
+  ; 检测输入法是否处于组合状态（正在输入中文）
+  if (IsImeComposing()) {
+    ; 让回车键正常传递给输入法确认候选词
+    Send("{Enter}")
+    return
+  }
+  
   ; 获取当前焦点控件
   focusedHwnd := ControlGetFocus("A")
   
@@ -791,6 +798,30 @@ Gui_HandleEnter(guiObj, *)
     Gui_Retry()  ; 重新翻译
   }
   ; 其他情况不做处理
+}
+
+IsImeComposing()
+{
+  ; 检测输入法是否处于组合/候选状态
+  ; 返回 true 表示正在输入中文（有候选词）
+  
+  focusedHwnd := ControlGetFocus("A")
+  if (!focusedHwnd)
+    focusedHwnd := WinGetID("A")
+  
+  ; 获取输入法上下文
+  hImc := DllCall("imm32\ImmGetContext", "Ptr", focusedHwnd, "Ptr")
+  if (!hImc)
+    return false
+  
+  ; 检查组合字符串长度 (GCS_COMPSTR = 0x8)
+  compLen := DllCall("imm32\ImmGetCompositionStringW", "Ptr", hImc, "UInt", 0x8, "Ptr", 0, "UInt", 0)
+  
+  ; 释放上下文
+  DllCall("imm32\ImmReleaseContext", "Ptr", focusedHwnd, "Ptr", hImc)
+  
+  ; 如果组合字符串长度 > 0，说明正在输入中
+  return (compLen > 0)
 }
 
 UpdateTranslateResult(result)
