@@ -82,7 +82,7 @@ prompt=请帮我润色以下文字，使其更加流畅自然：
 [Prompt_总结摘要]
 prompt=请用简洁的语言总结以下内容的要点：
 )"
-    FileAppend(defaultConfig, g_ConfigFile, "UTF-8")
+    FileAppend(defaultConfig, g_ConfigFile, "UTF-8-RAW")
   }
   
   ; 读取所有 prompt
@@ -163,7 +163,7 @@ SavePrompts()
   }
   
   try FileDelete(g_ConfigFile)
-  FileAppend(content, g_ConfigFile, "UTF-8")
+  FileAppend(content, g_ConfigFile, "UTF-8-RAW")
 }
 
 GetPromptByName(name)
@@ -454,7 +454,7 @@ StartAsyncHttp(prompt, requestType)
   
   ; 将 JSON 写入临时文件
   try {
-    FileAppend(json, jsonFile, "UTF-8")
+    FileAppend(json, jsonFile, "UTF-8-RAW")
   } catch {
     return 0
   }
@@ -1388,10 +1388,22 @@ StartChatAsync(question)
   
   ; 获取选中的 prompt 模板
   selectedPromptText := GetPromptByName(g_SelectedPrompt)
-  if (selectedPromptText != "")
+  
+  ; 替换模板中的变量
+  if (selectedPromptText != "") {
+    ; 获取原文框内容
+    global g_OrigEditCtrl
+    originalText := ""
+    if (g_OrigEditCtrl != "")
+      try originalText := g_OrigEditCtrl.Value
+    
+    ; 替换 {原文} 变量
+    selectedPromptText := StrReplace(selectedPromptText, "{原文}", originalText)
+    
     fullQuestion := selectedPromptText . "`n`n" . question
-  else
+  } else {
     fullQuestion := question
+  }
   
   ; 转义 prompt 用于 JSON
   prompt := fullQuestion
@@ -1418,7 +1430,7 @@ StartChatAsync(question)
   
   ; 将 JSON 写入临时文件
   try {
-    FileAppend(json, jsonFile, "UTF-8")
+    FileAppend(json, jsonFile, "UTF-8-RAW")
   } catch {
     return
   }
