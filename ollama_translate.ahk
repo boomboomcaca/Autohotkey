@@ -350,6 +350,7 @@ ShowMainGui(original)
   Hotkey("^Tab", Gui_ToggleSelect, "On")
   Hotkey("Tab", Gui_ToggleFocus, "On")
   Hotkey("^v", Gui_PasteAsText, "On")
+  Hotkey("Escape", Gui_Close.Bind(g_MainGui), "On")
   HotIfWinActive()
   
   ; 重置请求状态并异步调用 API
