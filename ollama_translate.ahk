@@ -351,6 +351,7 @@ ShowMainGui(original)
   Hotkey("Tab", Gui_ToggleFocus, "On")
   Hotkey("^v", Gui_PasteAsText, "On")
   Hotkey("Escape", Gui_Close.Bind(g_MainGui), "On")
+  Hotkey("^Backspace", Gui_DeleteWord, "On")
   HotIfWinActive()
   
   ; 重置请求状态并异步调用 API
@@ -726,6 +727,12 @@ Gui_PasteAsText(*)
       g_QuestionEditCtrl.Value := clipText
     }
   }
+}
+
+Gui_DeleteWord(*)
+{
+  ; 发送 Ctrl+Shift+Left 选中前一个单词，然后删除
+  Send("^+{Left}{Delete}")
 }
 
 GetClipboardText()
