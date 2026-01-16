@@ -720,11 +720,9 @@ Gui_PasteAsText(*)
     ; 获取当前焦点控件
     focusedHwnd := ControlGetFocus("A")
     
-    ; 只在可编辑的输入框中粘贴
-    if (focusedHwnd = g_OrigEditCtrl.Hwnd) {
-      g_OrigEditCtrl.Value := clipText
-    } else if (focusedHwnd = g_QuestionEditCtrl.Hwnd) {
-      g_QuestionEditCtrl.Value := clipText
+    ; 只在可编辑的输入框中粘贴（在光标位置插入，不覆盖全部内容）
+    if (focusedHwnd = g_OrigEditCtrl.Hwnd || focusedHwnd = g_QuestionEditCtrl.Hwnd) {
+      EditPaste(clipText, focusedHwnd)
     }
   }
 }
