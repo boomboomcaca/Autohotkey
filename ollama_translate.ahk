@@ -243,7 +243,7 @@ ShowMainGui(original)
 {
   global g_OriginalText, g_TranslateResult, g_CorrectResult, g_OldClip, g_MainGui
   global g_TranslateEditCtrl, g_CorrectEditCtrl, g_CorrectLabelCtrl, g_TranslateLabelCtrl, g_OrigEditCtrl, g_IsChineseMode, g_SelectedResult
-  global g_TtsOrigCtrl, g_TtsCorrectCtrl, g_TtsTranslateCtrl
+  global g_TtsOrigCtrl, g_TtsCorrectCtrl, g_TtsTranslateCtrl, g_TtsQuestionCtrl
   global g_ExplainEditCtrl, g_CorrectedText
   global g_QuestionEditCtrl, g_AnswerEditCtrl, g_SendBtnCtrl
   
@@ -328,6 +328,9 @@ ShowMainGui(original)
   g_PromptManageBtn := g_MainGui.AddButton("x+5 yp w50", "管理")
   g_PromptManageBtn.OnEvent("Click", Gui_ManagePrompts)
   
+  g_MainGui.AddText("xs w40 Section", "问题:")
+  g_TtsQuestionCtrl := g_MainGui.AddText("x+5 ys cGray", "🔊")
+  g_TtsQuestionCtrl.OnEvent("Click", Gui_PlayQuestion)
   g_QuestionEditCtrl := g_MainGui.AddEdit("xs w330 h50", "")
   g_SendBtnCtrl := g_MainGui.AddButton("x+5 yp h50 w60", "发送")
   g_SendBtnCtrl.OnEvent("Click", Gui_SendQuestion)
@@ -1021,6 +1024,12 @@ Gui_PlayTranslate(*)
   PlayTtsText(g_TranslateEditCtrl.Value)
 }
 
+Gui_PlayQuestion(*)
+{
+  global g_QuestionEditCtrl
+  PlayTtsText(g_QuestionEditCtrl.Value)
+}
+
 PlayTtsText(text)
 {
   static tempFile := ""
@@ -1080,8 +1089,8 @@ PlayTtsText(text)
 
 CheckTtsHover()
 {
-  global g_TtsOrigCtrl, g_TtsCorrectCtrl, g_TtsTranslateCtrl
-  global g_MainGui, g_TtsPlaying, g_IsChineseMode, g_HoverTarget
+  global g_TtsOrigCtrl, g_TtsCorrectCtrl, g_TtsTranslateCtrl, g_TtsQuestionCtrl
+  global g_MainGui, g_TtsPlaying, g_IsChineseMode, g_HoverTarget, g_QuestionEditCtrl
   static lastHoverCtrl := ""
 
   ; 如果窗口已关闭，停止定时器
@@ -1101,6 +1110,8 @@ CheckTtsHover()
       currentHover := "correct"
     else if (ctrlUnder = g_TtsTranslateCtrl.Hwnd)
       currentHover := "translate"
+    else if (g_TtsQuestionCtrl != "" && ctrlUnder = g_TtsQuestionCtrl.Hwnd)
+      currentHover := "question"
   } catch {
   }
 
@@ -1124,7 +1135,7 @@ CheckTtsHover()
 PlayTtsLoop()
 {
   global g_TtsPlaying, g_IsChineseMode, g_HoverTarget
-  global g_OrigEditCtrl, g_CorrectEditCtrl, g_TranslateEditCtrl
+  global g_OrigEditCtrl, g_CorrectEditCtrl, g_TranslateEditCtrl, g_QuestionEditCtrl
   static tempFile := ""
 
   if (!g_TtsPlaying || g_HoverTarget = "")
@@ -1137,6 +1148,8 @@ PlayTtsLoop()
     text := Trim(g_CorrectEditCtrl.Value)
   else if (g_HoverTarget = "translate")
     text := Trim(g_TranslateEditCtrl.Value)
+  else if (g_HoverTarget = "question")
+    text := Trim(g_QuestionEditCtrl.Value)
   else
     return
 
