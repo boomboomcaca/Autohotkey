@@ -628,3 +628,77 @@ return
 
 ; 引入 Ollama 翻译/纠错模块
 #Include "ollama_translate.ahk"
+
+; ============================================================
+; 移除指定窗口的关闭按钮
+; 用法：修改 TargetWindowTitle 为目标窗口标题的一部分
+; ============================================================
+RemoveCloseButton(windowTitle) {
+    SetTitleMatchMode(2)
+    if WinExist(windowTitle) {
+        hwnd := WinExist(windowTitle)
+        ; 获取系统菜单并删除关闭项
+        hMenu := DllCall("GetSystemMenu", "Ptr", hwnd, "Int", 0, "Ptr")
+        if (hMenu) {
+            SC_CLOSE := 0xF060
+            DllCall("DeleteMenu", "Ptr", hMenu, "UInt", SC_CLOSE, "UInt", 0)
+            DllCall("DrawMenuBar", "Ptr", hwnd)
+        }
+        return true
+    }
+    return false
+}
+
+; 目标窗口标题
+global g_TargetWindowTitle := "Windsurf 无限额度"
+global g_TargetHwnd := 0
+
+; 等待并移除指定窗口的关闭按钮
+SetTimer(WaitAndRemoveCloseButton, 1000)
+WaitAndRemoveCloseButton() {
+    global g_TargetWindowTitle, g_TargetHwnd
+    if RemoveCloseButton(g_TargetWindowTitle) {
+        g_TargetHwnd := WinExist(g_TargetWindowTitle)
+        SetTimer(WaitAndRemoveCloseButton, 0)
+        SetTimer(CheckMinimize, 100)  ; 开始监听最小化
+        TrayTip("窗口样式已修改", "已移除 [" . g_TargetWindowTitle . "] 的关闭按钮", 1)
+    }
+}
+
+; 监听最小化事件，改为隐藏到托盘
+CheckMinimize() {
+    global g_TargetHwnd, g_TargetWindowTitle
+    if (!g_TargetHwnd || !WinExist("ahk_id " . g_TargetHwnd))
+        return
+    
+    ; 检测窗口是否被最小化
+    if WinGetMinMax("ahk_id " . g_TargetHwnd) = -1 {
+        WinRestore("ahk_id " . g_TargetHwnd)  ; 先恢复
+        WinHide("ahk_id " . g_TargetHwnd)     ; 再隐藏
+        TrayTip("已隐藏到托盘", "双击托盘图标恢复窗口", 1)
+    }
+}
+
+; 双击托盘图标恢复窗口
+A_TrayMenu.Add()  ; 分隔线
+A_TrayMenu.Add("显示隐藏窗口", ShowTargetWindow)
+A_TrayMenu.Default := "显示隐藏窗口"
+
+ShowTargetWindow(*) {
+    global g_TargetHwnd, g_TargetWindowTitle
+    DetectHiddenWindows(true)  ; 检测隐藏窗口
+    SetTitleMatchMode(2)
+    ; 优先用句柄恢复
+    if (g_TargetHwnd && WinExist("ahk_id " . g_TargetHwnd)) {
+        WinShow("ahk_id " . g_TargetHwnd)
+        WinActivate("ahk_id " . g_TargetHwnd)
+        DetectHiddenWindows(false)
+        return
+    }
+    ; 备用：用标题查找
+    if WinExist(g_TargetWindowTitle) {
+        WinShow(g_TargetWindowTitle)
+        WinActivate(g_TargetWindowTitle)
+    }
+    DetectHiddenWindows(false)
+}
