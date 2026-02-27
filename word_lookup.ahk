@@ -10,6 +10,9 @@ g_WL_ResultCtrl := ""
 g_WL_TitleCtrl := ""
 g_WL_TtsIcon := ""
 WL_CurrentWord := ""
+WL_CurrentContext := ""
+g_WL_LangMode := "EN"
+g_WL_LangBtn := ""
 g_WL_StreamFile := ""
 g_WL_StreamPid := 0
 g_WL_Pending := false
@@ -144,8 +147,9 @@ g_WL_StreamContent := ""
 ; ===== 显示取词浮窗 =====
 ShowWordPopup(word, context, posX, posY)
 {
-  global g_WL_Gui, g_WL_ResultCtrl, g_WL_TitleCtrl, g_WL_TtsIcon, WL_CurrentWord
+  global g_WL_Gui, g_WL_ResultCtrl, g_WL_TitleCtrl, g_WL_TtsIcon, WL_CurrentWord, WL_CurrentContext, g_WL_LangMode, g_WL_LangBtn
   WL_CurrentWord := word
+  WL_CurrentContext := context
 
   g_WL_Gui := Gui("+AlwaysOnTop -Caption +Border +Owner")
   g_WL_Gui.BackColor := "FFFFFF"
@@ -155,13 +159,19 @@ ShowWordPopup(word, context, posX, posY)
   ; 标题行水平排列
   g_WL_Gui.SetFont("s14 c1a1a2e Bold", "Microsoft YaHei")
   
-  ; 在标题右侧添加朗读图标
+  ; 在标题右侧添加朗读图标和中英切换按钮
   g_WL_Gui.AddText("w120 Section", word)
   g_WL_TtsIcon := g_WL_Gui.AddText("x+5 ys c888888", "🔊")
   
-  ; 关联朗读事件（点击也可朗读）
+  g_WL_Gui.SetFont("s9 c333333 Norm", "Microsoft YaHei")
+  g_WL_LangBtn := g_WL_Gui.AddButton("x+10 ys-2 w40 h26", g_WL_LangMode = "EN" ? "EN" : "中")
+  
+  ; 关联事件
   if (g_WL_TtsIcon) {
     g_WL_TtsIcon.OnEvent("Click", (*) => PlayTtsText(word))
+  }
+  if (g_WL_LangBtn) {
+    g_WL_LangBtn.OnEvent("Click", (*) => WL_ToggleLang())
   }
 
   ; 语境行（可选中复制）
@@ -255,10 +265,31 @@ WL_CheckClickOutside()
   }
 }
 
+; ===== 切换语言 =====
+WL_ToggleLang()
+{
+  global g_WL_LangMode, g_WL_LangBtn, WL_CurrentWord, WL_CurrentContext, g_WL_ResultCtrl
+
+  if (g_WL_LangMode = "EN") {
+    g_WL_LangMode := "ZH"
+    g_WL_LangBtn.Text := "中"
+  } else {
+    g_WL_LangMode := "EN"
+    g_WL_LangBtn.Text := "EN"
+  }
+  
+  if (g_WL_ResultCtrl != "") {
+    g_WL_ResultCtrl.Value := "⏳ 正在切换语言并重新查询..."
+  }
+
+  ; 重新发起请求
+  StartWordOllamaRequest(WL_CurrentWord, WL_CurrentContext)
+}
+
 ; ===== 发起 Ollama 语境解释请求 =====
 StartWordOllamaRequest(word, context)
 {
-  global g_WL_StreamFile, g_WL_StreamPid, g_WL_Pending, g_WL_StreamContent
+  global g_WL_StreamFile, g_WL_StreamPid, g_WL_Pending, g_WL_StreamContent, g_WL_LangMode
 
   ; 终止之前的请求
   if (g_WL_StreamPid > 0) {
@@ -269,14 +300,27 @@ StartWordOllamaRequest(word, context)
   g_WL_Pending := true
   g_WL_StreamContent := ""
 
-  ; 构建 prompt
-  prompt := "你是一个英语词典。解释单词 '" . word . "'"
-  if (context != "" && context != word)
-    prompt .= " 在以下语境中的含义。\n语境：" . context
-  else
-    prompt .= " 的含义。"
+  if (g_WL_LangMode = "EN") {
+    ; 构建 prompt (英英释义模式)
+    prompt := "You are an English-English dictionary. Explain the word '" . word . "' entirely in simple English."
+    if (context != "" && context != word)
+      prompt .= " Please explain its meaning in the following context:\nContext: " . context
 
-  prompt .= "\n\n请用以下格式输出（纯文本，不用Markdown）：\n音标：/xxx/\n词性：xxx\n释义：xxx\n语境释义：在这个句子中表示...\n常见搭配：xxx"
+    prompt .= "\n\nPlease output using the following format (plain text only, no Markdown):\nPhonetics: /xxx/\nPart of Speech: xxx\nDefinition: [Simple English definition]\nContext Meaning: [Explanation based on the given context, if any]\nCollocations: [Common collocations or examples]"
+    
+    sysPrompt := "Output ONLY in English. Use plain text without Markdown formatting (no asterisks, hashes, etc.). Keep explanations concise and easy to understand."
+  } else {
+    ; 构建 prompt (英汉释义模式)
+    prompt := "你是一个英语词典。解释单词 '" . word . "'"
+    if (context != "" && context != word)
+      prompt .= " 在以下语境中的含义。\n语境：" . context
+    else
+      prompt .= " 的含义。"
+
+    prompt .= "\n\n请用以下格式输出（纯文本，不用Markdown）：\n音标：/xxx/\n词性：xxx\n释义：xxx\n语境释义：在这个句子中表示...\n常见搭配：xxx"
+    
+    sysPrompt := "纯文本输出，不要用任何符号（如反斜杠、星号、井号）包裹或强调单词。简洁回答。"
+  }
 
   ; 转义 JSON
   prompt := StrReplace(prompt, "\", "\\")
@@ -291,9 +335,6 @@ StartWordOllamaRequest(word, context)
 
   try FileDelete(g_WL_StreamFile)
   try FileDelete(jsonFile)
-
-  ; 系统提示
-  sysPrompt := "纯文本输出，不要用任何符号（如反斜杠、星号、井号）包裹或强调单词。简洁回答。"
 
   ; JSON
   json := '{"model":"huihui_ai/qwen3-abliterated:8b-v2","system":"' . sysPrompt . '","prompt":"' . prompt . '","stream":true,"options":{"temperature":0,"num_predict":512,"think":true}}'
