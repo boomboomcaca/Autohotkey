@@ -182,19 +182,37 @@ ShowWordPopup(word, context, posX, posY)
   g_WL_Gui.SetFont("s8 cAAAAAA", "Microsoft YaHei")
   g_WL_Gui.AddText("w320", "Esc 关闭 | 点击外部关闭")
 
-  ; 计算显示位置（鼠标右下方偏移 15px，避免超出屏幕）
-  guiW := 350
-  guiH := 320
+  ; 先在屏幕外显示一次，获取窗口的真实尺寸
+  g_WL_Gui.Show("x-9999 y-9999 NoActivate")
+  WinGetPos(, , &guiW, &guiH, "ahk_id " . g_WL_Gui.Hwnd)
+
+  ; 获取鼠标所在显示器的工作区域（排除任务栏）
+  monCount := MonitorGetCount()
+  monLeft := 0, monTop := 0, monRight := A_ScreenWidth, monBottom := A_ScreenHeight
+  Loop monCount {
+    MonitorGetWorkArea(A_Index, &mL, &mT, &mR, &mB)
+    if (posX >= mL && posX < mR && posY >= mT && posY < mB) {
+      monLeft := mL, monTop := mT, monRight := mR, monBottom := mB
+      break
+    }
+  }
+
   showX := posX + 15
   showY := posY + 15
 
-  ; 防止超出屏幕右边界
-  if (showX + guiW > A_ScreenWidth)
+  ; 超出右边界 → 弹到鼠标左侧
+  if (showX + guiW > monRight)
     showX := posX - guiW - 15
-  ; 防止超出屏幕下边界
-  if (showY + guiH > A_ScreenHeight)
+  ; 超出下边界 → 弹到鼠标上方
+  if (showY + guiH > monBottom)
     showY := posY - guiH - 15
+  ; 最终保底：不能超出左上角
+  if (showX < monLeft)
+    showX := monLeft
+  if (showY < monTop)
+    showY := monTop
 
+  ; 移动到正确位置
   g_WL_Gui.Show("x" . showX . " y" . showY . " NoActivate")
 
   ; 绑定 Esc 关闭
@@ -207,9 +225,6 @@ ShowWordPopup(word, context, posX, posY)
 
   ; 发起 Ollama 请求
   StartWordOllamaRequest(word, context)
-  
-  ; 自动发声读一次单词
-  PlayTtsText(word)
 }
 
 ; ===== Esc 关闭处理 =====
@@ -218,31 +233,15 @@ WL_HandleEsc(*)
   CloseWordGui()
 }
 
-; ===== 检测点击浮窗外部及朗读悬停 =====
+; ===== 检测点击浮窗外部 =====
 WL_CheckClickOutside()
 {
-  global g_WL_Gui, g_WL_TtsIcon, WL_CurrentWord
+  global g_WL_Gui
 
   if (g_WL_Gui = "") {
     SetTimer(WL_CheckClickOutside, 0)
     return
   }
-
-  ; 检测是否悬停在朗读图标上
-  static WL_lastHoverTts := false
-  currentHoverTts := false
-  try {
-    MouseGetPos(&mx, &my, &winUnder, &ctrlUnder, 2)
-    if (g_WL_TtsIcon && ctrlUnder = g_WL_TtsIcon.Hwnd) {
-      currentHoverTts := true
-    }
-  } catch {
-  }
-  
-  if (currentHoverTts && !WL_lastHoverTts) {
-    PlayTtsText(WL_CurrentWord)
-  }
-  WL_lastHoverTts := currentHoverTts
 
   ; 检测鼠标左键是否按下
   if (GetKeyState("LButton", "P")) {
