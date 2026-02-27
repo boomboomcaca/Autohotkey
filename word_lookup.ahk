@@ -164,19 +164,19 @@ ShowWordPopup(word, context, posX, posY)
     g_WL_TtsIcon.OnEvent("Click", (*) => PlayTtsText(word))
   }
 
-  ; 语境行
+  ; 语境行（可选中复制）
   if (context != "" && context != word) {
     g_WL_Gui.SetFont("s9 c888888 Norm", "Microsoft YaHei")
-    contextCtrl := g_WL_Gui.AddText("xs w320", "📖 " . context)
+    contextCtrl := g_WL_Gui.AddEdit("xs w320 ReadOnly -E0x200", "📖 " . context)
   }
 
   ; 分隔线
   g_WL_Gui.SetFont("s1 cCCCCCC", "Microsoft YaHei")
   g_WL_Gui.AddText("xs w320 0x10")  ; SS_ETCHEDHORZ
 
-  ; 结果区域
+  ; 结果区域（可选中复制）
   g_WL_Gui.SetFont("s10 c333333 Norm", "Microsoft YaHei")
-  g_WL_ResultCtrl := g_WL_Gui.AddText("xs w320 h180", "⏳ 正在查询...")
+  g_WL_ResultCtrl := g_WL_Gui.AddEdit("xs w320 h180 ReadOnly -E0x200", "⏳ 正在查询...")
 
   ; 底部提示
   g_WL_Gui.SetFont("s8 cAAAAAA", "Microsoft YaHei")
@@ -358,7 +358,7 @@ CheckWordResult()
     if (currentContent != "" && currentContent != g_WL_StreamContent) {
       g_WL_StreamContent := currentContent
       if (g_WL_ResultCtrl != "") {
-        try g_WL_ResultCtrl.Text := currentContent
+        try g_WL_ResultCtrl.Value := currentContent
       }
     }
 
@@ -367,7 +367,7 @@ CheckWordResult()
       Sleep(100)
       finalResult := WL_ReadStreamContent(g_WL_StreamFile)
       if (finalResult != "" && g_WL_ResultCtrl != "") {
-        try g_WL_ResultCtrl.Text := finalResult
+        try g_WL_ResultCtrl.Value := finalResult
       }
       g_WL_Pending := false
       SetTimer(CheckWordResult, 0)
