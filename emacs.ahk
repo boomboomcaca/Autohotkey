@@ -629,6 +629,9 @@ return
 ; 引入 Ollama 翻译/纠错模块
 #Include "ollama_translate.ahk"
 
+; 引入鼠标取词模块
+#Include "word_lookup.ahk"
+
 ; ============================================================
 ; 移除指定窗口的关闭按钮
 ; 用法：修改 TargetWindowTitle 为目标窗口标题的一部分
