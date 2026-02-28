@@ -26,6 +26,7 @@ g_CurrentText := ""
 g_TtsPlaying := false
 g_HoverTarget := ""
 g_PendingShowGui := false
+g_PrevForegroundHwnd := 0
 g_GuiHidden := false
 
 ; 流式响应相关
@@ -957,6 +958,9 @@ Gui_PlayOriginal(*)
   if (text = "")
     return
   
+  ; 恢复前台窗口，避免全屏时任务栏弹出
+  RestorePrevForeground()
+  
   ; 停止之前的播放
   try {
     SoundPlay("NonExistent.zzz")
@@ -1030,6 +1034,16 @@ Gui_PlayQuestion(*)
   PlayTtsText(g_QuestionEditCtrl.Value)
 }
 
+RestorePrevForeground()
+{
+  global g_PrevForegroundHwnd, g_MainGui
+  ; 恢复之前的前台窗口，防止全屏时任务栏弹出
+  try {
+    if (g_PrevForegroundHwnd && WinExist("ahk_id " . g_PrevForegroundHwnd))
+      WinActivate("ahk_id " . g_PrevForegroundHwnd)
+  }
+}
+
 PlayTtsText(text)
 {
   static tempFile := ""
@@ -1037,6 +1051,9 @@ PlayTtsText(text)
   text := Trim(text)
   if (text = "" || InStr(text, "正在") || InStr(text, "切换后"))
     return
+  
+  ; 恢复前台窗口，避免全屏时任务栏弹出
+  RestorePrevForeground()
   
   ; 停止之前的播放
   try {
@@ -1091,12 +1108,20 @@ CheckTtsHover()
 {
   global g_TtsOrigCtrl, g_TtsCorrectCtrl, g_TtsTranslateCtrl, g_TtsQuestionCtrl
   global g_MainGui, g_TtsPlaying, g_IsChineseMode, g_HoverTarget, g_QuestionEditCtrl
+  global g_PrevForegroundHwnd
   static lastHoverCtrl := ""
 
   ; 如果窗口已关闭，停止定时器
   if (g_MainGui = "") {
     SetTimer(CheckTtsHover, 0)
     return
+  }
+
+  ; 记录上一个非本窗口的前台窗口，用于朗读后恢复焦点
+  try {
+    fgHwnd := WinGetID("A")
+    if (fgHwnd != g_MainGui.Hwnd)
+      g_PrevForegroundHwnd := fgHwnd
   }
 
   ; 检测鼠标在哪个朗读图标上
