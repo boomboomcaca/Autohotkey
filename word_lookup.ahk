@@ -89,16 +89,33 @@ g_WL_MouseMoved := false
     return
   }
 
-  ; 7. 保存为临时 PNG
-  tempImg := A_Temp . "\ahk_word_capture.png"
-  Gdip_SaveBitmapToFile(pBitmap, tempImg)
+  ; 7. 放大 2 倍以提升 OCR 准确率
+  ocrScale := 2
+  origW := Gdip_GetImageWidth(pBitmap)
+  origH := Gdip_GetImageHeight(pBitmap)
+  newW := origW * ocrScale
+  newH := origH * ocrScale
+  pBitmapScaled := Gdip_CreateBitmap(newW, newH)
+  G := Gdip_GraphicsFromImage(pBitmapScaled)
+  Gdip_SetInterpolationMode(G, 7)  ; HighQualityBicubic
+  Gdip_DrawImage(G, pBitmap, 0, 0, newW, newH, 0, 0, origW, origH)
+  Gdip_DeleteGraphics(G)
   Gdip_DisposeImage(pBitmap)
+
+  ; 8. 保存为临时 PNG
+  tempImg := A_Temp . "\ahk_word_capture.png"
+  Gdip_SaveBitmapToFile(pBitmapScaled, tempImg)
+  Gdip_DisposeImage(pBitmapScaled)
   Gdip_Shutdown(pToken)
 
-  ; 8. 显示"正在识别..."提示
+  ; 鼠标坐标同步放大
+  relMouseX := relMouseX * ocrScale
+  relMouseY := relMouseY * ocrScale
+
+  ; 9. 显示"正在识别..."提示
   ToolTip("🔍 正在识别...")
 
-  ; 9. 调用 PowerShell OCR 脚本（同步等待结果）
+  ; 10. 调用 PowerShell OCR 脚本（同步等待结果）
   ocrScript := A_ScriptDir . "\ocr_word.ps1"
   ocrResultFile := A_Temp . "\ahk_ocr_result.txt"
   try FileDelete(ocrResultFile)
@@ -235,9 +252,10 @@ ShowWordPopup(word, context, posX, posY)
   HotIfWinActive()
 
   ; 启动鼠标移出关闭的检测定时器
-  global g_WL_InitMouseX, g_WL_InitMouseY, g_WL_MouseMoved
+  global g_WL_InitMouseX, g_WL_InitMouseY, g_WL_MouseMoved, g_WL_ShowTick
   MouseGetPos(&g_WL_InitMouseX, &g_WL_InitMouseY)
   g_WL_MouseMoved := false
+  g_WL_ShowTick := A_TickCount
   SetTimer(WL_CheckClickOutside, 200)
 
   ; 发起 Ollama 请求
@@ -259,6 +277,11 @@ WL_CheckClickOutside()
     SetTimer(WL_CheckClickOutside, 0)
     return
   }
+
+  ; 窗口显示后 1000ms 内不检测
+  global g_WL_ShowTick
+  if (A_TickCount - g_WL_ShowTick < 1000)
+    return
 
   ; 鼠标未移动前不检测，避免窗口刚显示就关闭
   global g_WL_InitMouseX, g_WL_InitMouseY, g_WL_MouseMoved
