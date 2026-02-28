@@ -1,4 +1,4 @@
-# ocr_word.ps1 - Windows 内置 OCR 取词脚本
+# ocr_word.ps1 - Tesseract 5 OCR 取词脚本
 # 用法: powershell -File ocr_word.ps1 -ImagePath "xxx.png" -MouseX 150 -MouseY 80 -OutputFile "result.txt"
 
 param(
@@ -19,104 +19,114 @@ Function WriteResult($text) {
 }
 
 try {
-    # 加载 WinRT 相关程序集
-    Add-Type -AssemblyName System.Runtime.WindowsRuntime
-    
-    $null = [Windows.Storage.StorageFile, Windows.Storage, ContentType = WindowsRuntime]
-    $null = [Windows.Storage.FileAccessMode, Windows.Storage, ContentType = WindowsRuntime]
-    $null = [Windows.Storage.Streams.IRandomAccessStream, Windows.Storage.Streams, ContentType = WindowsRuntime]
-    $null = [Windows.Graphics.Imaging.BitmapDecoder, Windows.Graphics.Imaging, ContentType = WindowsRuntime]
-    $null = [Windows.Graphics.Imaging.SoftwareBitmap, Windows.Graphics.Imaging, ContentType = WindowsRuntime]
-    $null = [Windows.Media.Ocr.OcrEngine, Windows.Media.Ocr, ContentType = WindowsRuntime]
-    $null = [Windows.Media.Ocr.OcrResult, Windows.Media.Ocr, ContentType = WindowsRuntime]
-    $null = [Windows.Globalization.Language, Windows.Globalization, ContentType = WindowsRuntime]
-
-    $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() |
-        Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and
-            $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]
-
-    Function Await($WinRtTask, $ResultType) {
-        $asTask = $asTaskGeneric.MakeGenericMethod($ResultType)
-        $netTask = $asTask.Invoke($null, @($WinRtTask))
-        $netTask.Wait(-1) | Out-Null
-        $netTask.Result
+    $tesseractPath = "C:\Program Files\Tesseract-OCR\tesseract.exe"
+    if (-not (Test-Path $tesseractPath)) {
+        WriteResult '{"found":false,"error":"Tesseract not found"}'
+        exit 1
     }
 
     $absPath = (Resolve-Path $ImagePath).Path
 
-    $file = Await ([Windows.Storage.StorageFile]::GetFileFromPathAsync($absPath)) ([Windows.Storage.StorageFile])
-    $stream = Await ($file.OpenAsync([Windows.Storage.FileAccessMode]::Read)) ([Windows.Storage.Streams.IRandomAccessStream])
-    $decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)) ([Windows.Graphics.Imaging.BitmapDecoder])
-    $bitmap = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+    # 设置 UTF-8 编码，避免中文乱码
+    $prevEncoding = [Console]::OutputEncoding
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-    $ocrEngine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
-    if (-not $ocrEngine) {
-        $lang = [Windows.Globalization.Language]::new("en-US")
-        $ocrEngine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromLanguage($lang)
-    }
+    # 调用 Tesseract 输出 TSV 格式（包含每个单词的坐标）
+    $tsvOutput = & $tesseractPath $absPath stdout -l eng+chi_sim --psm 6 tsv 2>$null
 
-    if (-not $ocrEngine) {
-        WriteResult '{"found":false,"error":"OCR engine not available"}'
+    # 恢复编码
+    [Console]::OutputEncoding = $prevEncoding
+    if (-not $tsvOutput) {
+        WriteResult '{"found":false,"error":"Tesseract returned no output"}'
         exit 1
     }
 
-    $result = Await ($ocrEngine.RecognizeAsync($bitmap)) ([Windows.Media.Ocr.OcrResult])
+    # 解析 TSV：收集所有单词及其坐标，按行分组
+    # TSV 列: level page_num block_num par_num line_num word_num left top width height conf text
+    $words = @()
+    $lines = @{}
 
-    $foundWord = $null
-    $foundLine = $null
+    foreach ($row in $tsvOutput) {
+        $cols = $row -split "`t"
+        if ($cols.Count -lt 12) { continue }
 
-    foreach ($line in $result.Lines) {
-        $lineText = $line.Text
-        foreach ($word in $line.Words) {
-            $rect = $word.BoundingRect
-            $x1 = $rect.X
-            $y1 = $rect.Y
-            $x2 = $rect.X + $rect.Width
-            $y2 = $rect.Y + $rect.Height
+        $level = $cols[0]
+        $lineNum = $cols[4]
+        $text = $cols[11]
 
-            $padding = 5
-            if ($MouseX -ge ($x1 - $padding) -and $MouseX -le ($x2 + $padding) -and
-                $MouseY -ge ($y1 - $padding) -and $MouseY -le ($y2 + $padding)) {
-                $foundWord = $word.Text
-                $foundLine = $lineText
-                break
-            }
+        # level 5 = 单词级别
+        if ($level -ne "5" -or [string]::IsNullOrWhiteSpace($text)) { continue }
+
+        $left = [int]$cols[6]
+        $top = [int]$cols[7]
+        $width = [int]$cols[8]
+        $height = [int]$cols[9]
+        $conf = [int]$cols[10]
+
+        # 跳过置信度过低的结果
+        if ($conf -lt 10) { continue }
+
+        $wordObj = @{
+            Text   = $text
+            Left   = $left
+            Top    = $top
+            Right  = $left + $width
+            Bottom = $top + $height
+            Line   = $lineNum
         }
-        if ($foundWord) { break }
+        $words += $wordObj
+
+        # 按行号分组，拼接行文本
+        if (-not $lines.ContainsKey($lineNum)) {
+            $lines[$lineNum] = @()
+        }
+        $lines[$lineNum] += $text
     }
 
+    if ($words.Count -eq 0) {
+        WriteResult '{"found":false,"error":"no words recognized"}'
+        exit 0
+    }
+
+    # 第一遍：精确匹配（鼠标在单词的 bounding box 内）
+    $foundWord = $null
+    $foundLine = $null
+    $padding = 5
+
+    foreach ($w in $words) {
+        if ($MouseX -ge ($w.Left - $padding) -and $MouseX -le ($w.Right + $padding) -and
+            $MouseY -ge ($w.Top - $padding) -and $MouseY -le ($w.Bottom + $padding)) {
+            $foundWord = $w.Text
+            $foundLine = ($lines[$w.Line] -join " ")
+            break
+        }
+    }
+
+    # 第二遍：最近距离匹配（同行内最近的单词）
     if (-not $foundWord) {
         $minDist = [double]::MaxValue
-        foreach ($line in $result.Lines) {
-            $lineText = $line.Text
-            foreach ($word in $line.Words) {
-                $rect = $word.BoundingRect
-                $vPadding = 10
-                if ($MouseY -ge ($rect.Y - $vPadding) -and $MouseY -le ($rect.Y + $rect.Height + $vPadding)) {
-                    $cx = $rect.X + $rect.Width / 2
-                    $dist = [Math]::Abs($MouseX - $cx)
-                    if ($dist -lt $minDist) {
-                        $minDist = $dist
-                        $foundWord = $word.Text
-                        $foundLine = $lineText
-                    }
+        $vPadding = 10
+        foreach ($w in $words) {
+            if ($MouseY -ge ($w.Top - $vPadding) -and $MouseY -le ($w.Bottom + $vPadding)) {
+                $cx = ($w.Left + $w.Right) / 2
+                $dist = [Math]::Abs($MouseX - $cx)
+                if ($dist -lt $minDist) {
+                    $minDist = $dist
+                    $foundWord = $w.Text
+                    $foundLine = ($lines[$w.Line] -join " ")
                 }
             }
         }
     }
 
-    $stream.Dispose()
-
     if ($foundWord) {
-        $cleanWord = $foundWord -replace '[^\p{L}\p{N}''`-]', ''
-        $cleanWord = $cleanWord -replace '\\', '\\' -replace '"', '\"'
+        $cleanWord = $foundWord -replace '\\', '\\' -replace '"', '\"'
         $cleanLine = $foundLine -replace '\\', '\\' -replace '"', '\"'
         WriteResult "{`"found`":true,`"word`":`"$cleanWord`",`"line`":`"$cleanLine`"}"
     }
     else {
         WriteResult '{"found":false,"error":"no word at cursor position"}'
     }
-
 }
 catch {
     $errMsg = $_.Exception.Message -replace '"', '\"'
