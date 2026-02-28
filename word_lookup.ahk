@@ -215,6 +215,8 @@ ShowWordPopup(word, context, posX, posY)
 
   ; 先在屏幕外显示一次，获取窗口的真实尺寸
   g_WL_Gui.Show("x-9999 y-9999 NoActivate")
+  ; 防止点击时窗口获得焦点，避免全屏时任务栏弹出
+  WinSetExStyle("+0x08000000", "ahk_id " . g_WL_Gui.Hwnd)  ; WS_EX_NOACTIVATE
   WinGetPos(, , &guiW, &guiH, "ahk_id " . g_WL_Gui.Hwnd)
 
   ; 获取鼠标所在显示器的工作区域（排除任务栏）

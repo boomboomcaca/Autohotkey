@@ -363,6 +363,14 @@ ShowMainGui(original)
   g_CorrectRequested := false
   g_TranslateRequested := false
   
+  ; 记录当前前台窗口，用于朗读时恢复
+  global g_PrevForegroundHwnd
+  try {
+    fgHwnd := WinGetID("A")
+    if (fgHwnd != g_MainGui.Hwnd)
+      g_PrevForegroundHwnd := fgHwnd
+  }
+  
   ; 直接显示窗口，不等待 AI 响应
   g_PendingShowGui := false
   if (original = "") {
@@ -1639,6 +1647,13 @@ Gui_Close(guiObj, *)
 !SC029::
 {
   global g_MainGui, g_GuiHidden, g_OldClip, g_OrigEditCtrl, g_OriginalText, g_SelectedResult
+  global g_PrevForegroundHwnd
+  
+  ; 记录当前前台窗口，用于朗读时恢复焦点
+  try {
+    fgHwnd := WinGetID("A")
+    g_PrevForegroundHwnd := fgHwnd
+  }
   
   ; 窗口已显示 → 隐藏到后台
   if (g_MainGui != "" && !g_GuiHidden) {
