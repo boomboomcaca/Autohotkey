@@ -17,6 +17,10 @@ g_WL_StreamFile := ""
 g_WL_StreamPid := 0
 g_WL_Pending := false
 g_WL_StreamContent := ""
+g_WL_ShowTick := 0
+g_WL_InitMouseX := 0
+g_WL_InitMouseY := 0
+g_WL_MouseMoved := false
 
 ; ===== 快捷键 Alt+F1 =====
 !F1::
@@ -190,7 +194,7 @@ ShowWordPopup(word, context, posX, posY)
 
   ; 底部提示
   g_WL_Gui.SetFont("s8 cAAAAAA", "Microsoft YaHei")
-  g_WL_Gui.AddText("w320", "Esc 关闭 | 点击外部关闭")
+  g_WL_Gui.AddText("w320", "Esc 关闭 | 鼠标移出关闭")
 
   ; 先在屏幕外显示一次，获取窗口的真实尺寸
   g_WL_Gui.Show("x-9999 y-9999 NoActivate")
@@ -230,7 +234,10 @@ ShowWordPopup(word, context, posX, posY)
   Hotkey("Escape", WL_HandleEsc, "On")
   HotIfWinActive()
 
-  ; 启动点击外部关闭的检测定时器
+  ; 启动鼠标移出关闭的检测定时器
+  global g_WL_InitMouseX, g_WL_InitMouseY, g_WL_MouseMoved
+  MouseGetPos(&g_WL_InitMouseX, &g_WL_InitMouseY)
+  g_WL_MouseMoved := false
   SetTimer(WL_CheckClickOutside, 200)
 
   ; 发起 Ollama 请求
@@ -253,14 +260,22 @@ WL_CheckClickOutside()
     return
   }
 
-  ; 检测鼠标左键是否按下
-  if (GetKeyState("LButton", "P")) {
-    MouseGetPos(&mx, &my, &winAtMouse)
-    try {
-      if (winAtMouse != g_WL_Gui.Hwnd) {
-        CloseWordGui()
-        return
-      }
+  ; 鼠标未移动前不检测，避免窗口刚显示就关闭
+  global g_WL_InitMouseX, g_WL_InitMouseY, g_WL_MouseMoved
+  MouseGetPos(&cx, &cy)
+  if (!g_WL_MouseMoved) {
+    if (Abs(cx - g_WL_InitMouseX) > 5 || Abs(cy - g_WL_InitMouseY) > 5)
+      g_WL_MouseMoved := true
+    else
+      return
+  }
+
+  ; 检测鼠标是否在窗口外，是则自动关闭
+  MouseGetPos(&mx, &my, &winAtMouse)
+  try {
+    if (winAtMouse != g_WL_Gui.Hwnd) {
+      CloseWordGui()
+      return
     }
   }
 }
