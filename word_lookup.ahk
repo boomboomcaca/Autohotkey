@@ -385,34 +385,10 @@ StartWordOllamaRequest(word, context)
     return
   }
 
-  ; PowerShell 流式请求
-  psScript := ""
-  . "$body = Get-Content -Path '" . jsonFile . "' -Raw -Encoding UTF8;"
-  . "$utf8 = [System.Text.Encoding]::UTF8;"
-  . "$bytes = $utf8.GetBytes($body);"
-  . "$req = [System.Net.HttpWebRequest]::Create('http://localhost:11434/api/generate');"
-  . "$req.Method = 'POST';"
-  . "$req.ContentType = 'application/json';"
-  . "$req.ContentLength = $bytes.Length;"
-  . "$reqStream = $req.GetRequestStream();"
-  . "$reqStream.Write($bytes, 0, $bytes.Length);"
-  . "$reqStream.Close();"
-  . "$resp = $req.GetResponse();"
-  . "$reader = New-Object System.IO.StreamReader($resp.GetResponseStream());"
-  . "$fs = New-Object System.IO.FileStream('" . g_WL_StreamFile . "', [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite);"
-  . "$sw = New-Object System.IO.StreamWriter($fs, [System.Text.Encoding]::UTF8);"
-  . "while(-not $reader.EndOfStream) {"
-  . "  $line = $reader.ReadLine();"
-  . "  $sw.WriteLine($line);"
-  . "  $sw.Flush();"
-  . "}"
-  . "$sw.Close();"
-  . "$fs.Close();"
-  . "$reader.Close();"
-  . "$resp.Close();"
-
+  ; 使用公用脚本发起流式请求
+  psFile := A_ScriptDir . "\ollama_stream.ps1"
   try {
-    Run('powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "' . psScript . '"', , "Hide", &outPid)
+    Run('powershell.exe -NoProfile -ExecutionPolicy Bypass -File "' . psFile . '" -JsonFile "' . jsonFile . '" -OutputFile "' . g_WL_StreamFile . '"', , "Hide", &outPid)
     g_WL_StreamPid := outPid
   } catch {
     return
