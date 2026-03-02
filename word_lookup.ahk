@@ -21,6 +21,7 @@ g_WL_ShowTick := 0
 g_WL_InitMouseX := 0
 g_WL_InitMouseY := 0
 g_WL_MouseMoved := false
+g_WL_TtsPlaying := false
 
 ; ===== 快捷键 Alt+F1 =====
 !F1::
@@ -188,9 +189,6 @@ ShowWordPopup(word, context, posX, posY)
   g_WL_LangBtn := g_WL_Gui.AddButton("x+10 ys-2 w40 h26", g_WL_LangMode = "EN" ? "EN" : "中")
   
   ; 关联事件
-  if (g_WL_TtsIcon) {
-    g_WL_TtsIcon.OnEvent("Click", (*) => PlayTtsText(word))
-  }
   if (g_WL_LangBtn) {
     g_WL_LangBtn.OnEvent("Click", (*) => WL_ToggleLang())
   }
@@ -259,6 +257,7 @@ ShowWordPopup(word, context, posX, posY)
   g_WL_MouseMoved := false
   g_WL_ShowTick := A_TickCount
   SetTimer(WL_CheckClickOutside, 200)
+  SetTimer(WL_CheckTtsHover, 100)
 
   ; 发起 Ollama 请求
   StartWordOllamaRequest(word, context)
@@ -491,6 +490,10 @@ CloseWordGui()
   g_WL_Pending := false
   SetTimer(CheckWordResult, 0)
   SetTimer(WL_CheckClickOutside, 0)
+  SetTimer(WL_CheckTtsHover, 0)
+  SetTimer(WL_PlayTtsLoop, 0)
+  g_WL_TtsPlaying := false
+  try SoundPlay("NonExistent.zzz")
 
   ; 销毁 GUI
   if (g_WL_Gui != "") {
@@ -503,5 +506,89 @@ CloseWordGui()
     g_WL_Gui := ""
     g_WL_ResultCtrl := ""
     g_WL_TitleCtrl := ""
+  }
+}
+
+; ===== 鼠标悬停朗读检测 =====
+WL_CheckTtsHover()
+{
+  global g_WL_Gui, g_WL_TtsIcon, g_WL_TtsPlaying, WL_CurrentWord
+  static lastHover := false
+
+  if (g_WL_Gui = "") {
+    SetTimer(WL_CheckTtsHover, 0)
+    return
+  }
+
+  isHover := false
+  try {
+    MouseGetPos(&mx, &my, &winUnder, &ctrlUnder, 2)
+    if (ctrlUnder = g_WL_TtsIcon.Hwnd)
+      isHover := true
+  } catch {
+  }
+
+  if (isHover && !lastHover) {
+    g_WL_TtsPlaying := true
+    SetTimer(WL_PlayTtsLoop, -10)
+  } else if (!isHover && lastHover) {
+    g_WL_TtsPlaying := false
+    SetTimer(WL_PlayTtsLoop, 0)
+    try {
+      SoundPlay("NonExistent.zzz")
+    }
+  }
+  
+  lastHover := isHover
+}
+
+WL_PlayTtsLoop()
+{
+  global g_WL_TtsPlaying, WL_CurrentWord
+  static tempFile := ""
+
+  if (!g_WL_TtsPlaying || WL_CurrentWord = "")
+    return
+
+  text := Trim(WL_CurrentWord)
+
+  ; 使用 Google TTS API
+  try {
+    encodedText := ""
+    Loop Parse, text
+    {
+      char := A_LoopField
+      if RegExMatch(char, "[a-zA-Z0-9\-_.~]")
+        encodedText .= char
+      else
+        encodedText .= "%" . Format("{:02X}", Ord(char))
+    }
+
+    ttsUrl := "https://translate.google.com/translate_tts?ie=UTF-8&tl=en-US&client=tw-ob&q=" . encodedText
+    tempFile := A_Temp . "\ahk_wl_tts_audio.mp3"
+
+    http := ComObject("WinHttp.WinHttpRequest.5.1")
+    http.Open("GET", ttsUrl, false)
+    http.SetRequestHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+    http.SetRequestHeader("Referer", "https://translate.google.com/")
+    http.Send()
+    http.WaitForResponse()
+
+    if (http.Status = 200) {
+      adoStream := ComObject("ADODB.Stream")
+      adoStream.Type := 1
+      adoStream.Open()
+      adoStream.Write(http.ResponseBody)
+      adoStream.SaveToFile(tempFile, 2)
+      adoStream.Close()
+
+      ; 播放并等待完成
+      SoundPlay(tempFile, "Wait")
+
+      ; 播放完毕后如果还在悬停并且窗口还在，继续播放
+      if (g_WL_TtsPlaying && g_WL_Gui != "")
+        SetTimer(WL_PlayTtsLoop, -100)
+    }
+  } catch {
   }
 }
