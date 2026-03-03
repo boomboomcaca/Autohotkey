@@ -14,6 +14,7 @@ g_WL_TtsIcon := ""
 WL_CurrentWord := ""
 WL_CurrentContext := ""
 g_WL_LangMode := "EN"
+try g_WL_LangMode := IniRead(A_ScriptDir . "\ollama_config.ini", "Settings", "WordLookupLang", "EN")
 g_WL_LangBtn := ""
 g_WL_StreamFile := ""
 g_WL_StreamPid := 0
@@ -329,6 +330,7 @@ WL_ToggleLang()
     g_WL_LangMode := "EN"
     g_WL_LangBtn.Text := "EN"
   }
+  try IniWrite(g_WL_LangMode, A_ScriptDir . "\\ollama_config.ini", "Settings", "WordLookupLang")
   
   if (g_WL_ResultCtrl != "") {
     g_WL_ResultCtrl.Value := "⏳ 正在切换语言并重新查询..."
