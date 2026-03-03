@@ -78,6 +78,9 @@ LoadPrompts()
       currentPrompt := ""
     } else if (RegExMatch(line, "^prompt=(.*)$", &m) && currentName != "") {
       currentPrompt := m[1]
+    } else if (currentName != "" && currentPrompt != "" && !RegExMatch(line, "^\[")) {
+      ; 多行 prompt：非 section 头的后续行追加到当前 prompt
+      currentPrompt .= "`n" . line
     }
   }
   
