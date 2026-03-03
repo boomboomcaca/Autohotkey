@@ -8,6 +8,8 @@
 g_WL_Gui := ""
 g_WL_ResultCtrl := ""
 g_WL_TitleCtrl := ""
+g_WL_WordEdit := ""
+g_WL_ContextEdit := ""
 g_WL_TtsIcon := ""
 WL_CurrentWord := ""
 WL_CurrentContext := ""
@@ -169,7 +171,7 @@ g_WL_TtsPlaying := false
 ; ===== 显示取词浮窗 =====
 ShowWordPopup(word, context, posX, posY)
 {
-  global g_WL_Gui, g_WL_ResultCtrl, g_WL_TitleCtrl, g_WL_TtsIcon, WL_CurrentWord, WL_CurrentContext, g_WL_LangMode, g_WL_LangBtn
+  global g_WL_Gui, g_WL_ResultCtrl, g_WL_TitleCtrl, g_WL_TtsIcon, g_WL_WordEdit, WL_CurrentWord, WL_CurrentContext, g_WL_LangMode, g_WL_LangBtn
   WL_CurrentWord := word
   WL_CurrentContext := context
 
@@ -181,9 +183,9 @@ ShowWordPopup(word, context, posX, posY)
   ; 标题行水平排列
   g_WL_Gui.SetFont("s14 c1a1a2e Bold", "Microsoft YaHei")
   
-  ; 在标题右侧添加朗读图标和中英切换按钮
-  g_WL_Gui.AddText("w120 Section", word)
-  g_WL_TtsIcon := g_WL_Gui.AddText("x+5 ys c888888", "🔊")
+  ; 单词可编辑输入框 + 朗读图标 + 中英切换按钮
+  g_WL_WordEdit := g_WL_Gui.AddEdit("w120 Section -E0x200", word)
+  g_WL_TtsIcon := g_WL_Gui.AddText("x+5 ys+4 c888888", "🔊")
   
   g_WL_Gui.SetFont("s9 c333333 Norm", "Microsoft YaHei")
   g_WL_LangBtn := g_WL_Gui.AddButton("x+10 ys-2 w40 h26", g_WL_LangMode = "EN" ? "EN" : "中")
@@ -193,11 +195,9 @@ ShowWordPopup(word, context, posX, posY)
     g_WL_LangBtn.OnEvent("Click", (*) => WL_ToggleLang())
   }
 
-  ; 语境行（可选中复制）
-  if (context != "" && context != word) {
-    g_WL_Gui.SetFont("s9 c888888 Norm", "Microsoft YaHei")
-    contextCtrl := g_WL_Gui.AddEdit("xs w320 ReadOnly -E0x200", "📖 " . context)
-  }
+  ; 语境行（可编辑）
+  g_WL_Gui.SetFont("s9 c888888 Norm", "Microsoft YaHei")
+  g_WL_ContextEdit := g_WL_Gui.AddEdit("xs w320 -E0x200", (context != "" && context != word) ? context : "")
 
   ; 分隔线
   g_WL_Gui.SetFont("s1 cCCCCCC", "Microsoft YaHei")
@@ -209,7 +209,7 @@ ShowWordPopup(word, context, posX, posY)
 
   ; 底部提示
   g_WL_Gui.SetFont("s8 cAAAAAA", "Microsoft YaHei")
-  g_WL_Gui.AddText("w320", "Esc 关闭 | 鼠标移出关闭")
+  g_WL_Gui.AddText("w320", "Enter 重新查询 | Esc 关闭 | 鼠标移出关闭")
 
   ; 先在屏幕外显示一次，获取窗口的真实尺寸
   g_WL_Gui.Show("x-9999 y-9999 NoActivate")
@@ -244,9 +244,10 @@ ShowWordPopup(word, context, posX, posY)
   ; 移动到正确位置
   g_WL_Gui.Show("x" . showX . " y" . showY . " NoActivate")
 
-  ; 绑定 Esc 关闭
+  ; 绑定 Esc 关闭 和 Enter 重新查询
   HotIfWinActive("ahk_id " g_WL_Gui.Hwnd)
   Hotkey("Escape", WL_HandleEsc, "On")
+  Hotkey("Enter", WL_HandleEnter, "On")
   HotIfWinActive()
 
   ; 启动鼠标移出关闭的检测定时器
@@ -259,6 +260,26 @@ ShowWordPopup(word, context, posX, posY)
 
   ; 发起 Ollama 请求
   StartWordOllamaRequest(word, context)
+}
+
+; ===== Enter 重新查询 =====
+WL_HandleEnter(*)
+{
+  global g_WL_WordEdit, g_WL_ContextEdit, g_WL_ResultCtrl, WL_CurrentWord, WL_CurrentContext
+
+  if (g_WL_WordEdit = "")
+    return
+
+  newWord := Trim(g_WL_WordEdit.Value)
+  if (newWord = "")
+    return
+
+  newContext := (g_WL_ContextEdit != "") ? Trim(g_WL_ContextEdit.Value) : ""
+  WL_CurrentWord := newWord
+  WL_CurrentContext := newContext
+  if (g_WL_ResultCtrl != "")
+    g_WL_ResultCtrl.Value := "⏳ 正在查询..."
+  StartWordOllamaRequest(newWord, newContext)
 }
 
 ; ===== Esc 关闭处理 =====
@@ -498,12 +519,15 @@ CloseWordGui()
     try {
       HotIfWinActive("ahk_id " g_WL_Gui.Hwnd)
       Hotkey("Escape", WL_HandleEsc, "Off")
+      Hotkey("Enter", WL_HandleEnter, "Off")
       HotIfWinActive()
     }
     try g_WL_Gui.Destroy()
     g_WL_Gui := ""
     g_WL_ResultCtrl := ""
     g_WL_TitleCtrl := ""
+    g_WL_WordEdit := ""
+    g_WL_ContextEdit := ""
   }
 }
 
