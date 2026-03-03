@@ -27,12 +27,50 @@ try {
 
     $absPath = (Resolve-Path $ImagePath).Path
 
+    # 图片预处理：灰度化 + 深色背景自动反色（使用 C# 编译代码，毫秒级处理）
+    Add-Type -AssemblyName System.Drawing
+    Add-Type -Language CSharp -TypeDefinition @"
+    using System;
+    using System.Drawing;
+    using System.Drawing.Imaging;
+    using System.Runtime.InteropServices;
+    public static class OcrPreprocess {
+        public static void GrayAndAutoInvert(string src, string dst) {
+            using (var bmp = new Bitmap(src)) {
+                int w = bmp.Width, h = bmp.Height;
+                var result = new Bitmap(w, h, PixelFormat.Format24bppRgb);
+                var rect = new Rectangle(0, 0, w, h);
+                var srcD = bmp.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
+                var dstD = result.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format24bppRgb);
+                int bytes = srcD.Stride * h;
+                byte[] srcB = new byte[bytes], dstB = new byte[bytes];
+                Marshal.Copy(srcD.Scan0, srcB, 0, bytes);
+                long total = 0;
+                for (int i = 0; i < bytes; i += 3) {
+                    byte g = (byte)(0.114*srcB[i] + 0.587*srcB[i+1] + 0.299*srcB[i+2]);
+                    dstB[i] = g; dstB[i+1] = g; dstB[i+2] = g;
+                    total += g;
+                }
+                if (total / (w * h) < 128) {
+                    for (int i = 0; i < bytes; i++) dstB[i] = (byte)(255 - dstB[i]);
+                }
+                Marshal.Copy(dstB, 0, dstD.Scan0, bytes);
+                bmp.UnlockBits(srcD);
+                result.UnlockBits(dstD);
+                result.Save(dst, ImageFormat.Png);
+            }
+        }
+    }
+"@ -ReferencedAssemblies System.Drawing
+    $processedPath = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "ahk_ocr_processed.png")
+    [OcrPreprocess]::GrayAndAutoInvert($absPath, $processedPath)
+
     # 设置 UTF-8 编码，避免中文乱码
     $prevEncoding = [Console]::OutputEncoding
     [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
     # 调用 Tesseract 输出 TSV 格式（包含每个单词的坐标）
-    $tsvOutput = & $tesseractPath $absPath stdout -l eng+chi_sim --psm 6 tsv 2>$null
+    $tsvOutput = & $tesseractPath $processedPath stdout -l eng+chi_sim --psm 3 tsv 2>$null
 
     # 恢复编码
     [Console]::OutputEncoding = $prevEncoding
