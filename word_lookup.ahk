@@ -570,37 +570,13 @@ WL_PlayTtsLoop()
 
   text := Trim(WL_CurrentWord)
 
-  ; 使用 Google TTS API
+  ; 使用 Edge TTS（微软神经网络语音，美式英语）
   try {
-    encodedText := ""
-    Loop Parse, text
-    {
-      char := A_LoopField
-      if RegExMatch(char, "[a-zA-Z0-9\-_.~]")
-        encodedText .= char
-      else
-        encodedText .= "%" . Format("{:02X}", Ord(char))
-    }
-
-    ttsUrl := "https://translate.google.com/translate_tts?ie=UTF-8&tl=en-US&client=tw-ob&q=" . encodedText
     tempFile := A_Temp . "\ahk_wl_tts_audio.mp3"
+    escapedText := StrReplace(text, '"', '\"')
+    RunWait('edge-tts --voice en-US-AriaNeural --text "' . escapedText . '" --write-media "' . tempFile . '"', , "Hide")
 
-    http := ComObject("WinHttp.WinHttpRequest.5.1")
-    http.Open("GET", ttsUrl, false)
-    http.SetRequestHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-    http.SetRequestHeader("Referer", "https://translate.google.com/")
-    http.Send()
-    http.WaitForResponse()
-
-    if (http.Status = 200) {
-      adoStream := ComObject("ADODB.Stream")
-      adoStream.Type := 1
-      adoStream.Open()
-      adoStream.Write(http.ResponseBody)
-      adoStream.SaveToFile(tempFile, 2)
-      adoStream.Close()
-
-      ; 播放并等待完成
+    if FileExist(tempFile) {
       SoundPlay(tempFile, "Wait")
 
       ; 播放完毕后如果还在悬停并且窗口还在，继续播放
