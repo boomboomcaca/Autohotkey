@@ -39,37 +39,20 @@ g_WL_TtsPlaying := false
   ; 1. 获取鼠标绝对坐标
   MouseGetPos(&mouseX, &mouseY, &winUnder)
 
-  ; 2. 获取鼠标所在窗口的位置和大小
-  try {
-    WinGetPos(&winX, &winY, &winW, &winH, "ahk_id " . winUnder)
-  } catch {
-    ToolTip("无法获取窗口信息")
-    SetTimer(ToolTip, -2000)
-    return
-  }
+  ; 2. 以鼠标为中心截取固定区域（避免多显示器/DPI 下窗口坐标不准）
+  dpi := 96
+  try dpi := DllCall("GetDpiForWindow", "Ptr", winUnder, "UInt")
+  if (dpi < 96)
+    dpi := 96
+  scale := dpi / 96
+  captureW := Round(600 * scale)
+  captureH := Round(400 * scale)
+  winX := mouseX - Round(captureW / 2)
+  winY := mouseY - Round(captureH / 2)
+  winW := captureW
+  winH := captureH
 
-  ; 3. 限制截图最大尺寸（防止超大窗口导致 OCR 过慢）
-  maxW := 1920
-  maxH := 1080
-  if (winW > maxW || winH > maxH) {
-    ; 窗口太大，改为截取鼠标周围区域
-    dpi := DllCall("GetDpiForWindow", "Ptr", winUnder, "UInt")
-    if (dpi < 96)
-      dpi := 96
-    scale := dpi / 96
-    captureW := Round(600 * scale)
-    captureH := Round(400 * scale)
-    winX := mouseX - Round(captureW / 2)
-    winY := mouseY - Round(captureH / 2)
-    if (winX < 0)
-      winX := 0
-    if (winY < 0)
-      winY := 0
-    winW := captureW
-    winH := captureH
-  }
-
-  ; 4. 计算鼠标在截图中的相对坐标
+  ; 3. 计算鼠标在截图中的相对坐标（始终在中心）
   relMouseX := mouseX - winX
   relMouseY := mouseY - winY
 
