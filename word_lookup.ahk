@@ -185,10 +185,10 @@ ShowWordPopup(word, context, posX, posY)
   
   ; 单词可编辑输入框 + 朗读图标 + 中英切换按钮
   g_WL_WordEdit := g_WL_Gui.AddEdit("w120 Section -E0x200", word)
-  g_WL_TtsIcon := g_WL_Gui.AddText("x+5 ys+4 c888888", "🔊")
+  g_WL_TtsIcon := g_WL_Gui.AddText("x+5 ys+1 c888888", "🔊")
   
   g_WL_Gui.SetFont("s9 c333333 Norm", "Microsoft YaHei")
-  g_WL_LangBtn := g_WL_Gui.AddButton("x+10 ys-2 w40 h26", g_WL_LangMode = "EN" ? "EN" : "中")
+  g_WL_LangBtn := g_WL_Gui.AddButton("x+10 ys+1 w40 h26", g_WL_LangMode = "EN" ? "EN" : "中")
   
   ; 关联事件
   if (g_WL_LangBtn) {
