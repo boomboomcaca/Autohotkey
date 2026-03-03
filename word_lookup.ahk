@@ -25,6 +25,9 @@ g_WL_InitMouseX := 0
 g_WL_InitMouseY := 0
 g_WL_MouseMoved := false
 g_WL_TtsPlaying := false
+g_WL_TtsFile := ""
+g_WL_TtsPid := 0
+g_WL_TtsWord := ""
 
 ; ===== 快捷键 Alt+F1 =====
 !F1::
@@ -241,6 +244,9 @@ ShowWordPopup(word, context, posX, posY)
   g_WL_ShowTick := A_TickCount
   SetTimer(WL_CheckClickOutside, 200)
   SetTimer(WL_CheckTtsHover, 100)
+
+  ; 预生成 TTS 音频（后台，不阻塞）
+  WL_PregenTts(word)
 
   ; 发起 Ollama 请求
   StartWordOllamaRequest(word, context)
@@ -560,24 +566,59 @@ WL_CheckTtsHover()
   lastHover := isHover
 }
 
+; ===== 预生成 TTS 音频（后台） =====
+WL_PregenTts(word)
+{
+  global g_WL_TtsFile, g_WL_TtsPid, g_WL_TtsWord
+
+  ; 终止上一次预生成
+  if (g_WL_TtsPid > 0) {
+    try ProcessClose(g_WL_TtsPid)
+    g_WL_TtsPid := 0
+  }
+
+  text := Trim(word)
+  if (text = "")
+    return
+
+  g_WL_TtsWord := text
+  g_WL_TtsFile := A_Temp . "\ahk_wl_tts_audio.mp3"
+  try FileDelete(g_WL_TtsFile)
+
+  escapedText := StrReplace(text, '"', '\"')
+  try {
+    Run('edge-tts --voice en-US-AriaNeural --text "' . escapedText . '" --write-media "' . g_WL_TtsFile . '"', , "Hide", &outPid)
+    g_WL_TtsPid := outPid
+  }
+}
+
 WL_PlayTtsLoop()
 {
-  global g_WL_TtsPlaying, WL_CurrentWord
-  static tempFile := ""
+  global g_WL_TtsPlaying, WL_CurrentWord, g_WL_TtsFile, g_WL_TtsPid, g_WL_TtsWord
 
   if (!g_WL_TtsPlaying || WL_CurrentWord = "")
     return
 
   text := Trim(WL_CurrentWord)
 
-  ; 使用 Edge TTS（微软神经网络语音，美式英语）
-  try {
-    tempFile := A_Temp . "\ahk_wl_tts_audio.mp3"
-    escapedText := StrReplace(text, '"', '\"')
-    RunWait('edge-tts --voice en-US-AriaNeural --text "' . escapedText . '" --write-media "' . tempFile . '"', , "Hide")
+  ; 如果单词变了，重新生成
+  if (text != g_WL_TtsWord) {
+    WL_PregenTts(text)
+  }
 
-    if FileExist(tempFile) {
-      SoundPlay(tempFile, "Wait")
+  ; 等待预生成完成（最多等 3 秒）
+  if (g_WL_TtsPid > 0) {
+    waited := 0
+    while (g_WL_TtsPid > 0 && ProcessExist(g_WL_TtsPid) && waited < 3000) {
+      Sleep(100)
+      waited += 100
+    }
+    g_WL_TtsPid := 0
+  }
+
+  try {
+    if FileExist(g_WL_TtsFile) {
+      SoundPlay(g_WL_TtsFile, "Wait")
 
       ; 播放完毕后如果还在悬停并且窗口还在，继续播放
       if (g_WL_TtsPlaying && g_WL_Gui != "")
