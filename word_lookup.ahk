@@ -317,6 +317,17 @@ WL_CheckClickOutside()
   MouseGetPos(&mx, &my, &winAtMouse)
   try {
     if (winAtMouse != g_WL_Gui.Hwnd) {
+      ; 检查是否为输入法相关窗口，避免中文输入时误关闭
+      try {
+        imeClass := WinGetClass("ahk_id " . winAtMouse)
+        imePid := WinGetPID("ahk_id " . winAtMouse)
+        imeProcName := ProcessGetName(imePid)
+        if (imeClass = "ApplicationFrameWindow"
+          || imeProcName = "TextInputHost.exe"
+          || InStr(imeClass, "IME") || InStr(imeClass, "MSCTFIME") || InStr(imeClass, "Cand")
+          || InStr(imeProcName, "IME"))
+          return
+      }
       CloseWordGui()
       return
     }
