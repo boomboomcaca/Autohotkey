@@ -9,6 +9,9 @@ if !A_IsAdmin {
 }
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
+; 设置 Per-Monitor DPI Aware v2，确保坐标始终使用物理像素（解决高DPI下截图偏移问题）
+DllCall("SetProcessDpiAwarenessContext", "ptr", -4)
+
 ;;
 ;; An autohotkey script that provides emacs-like keybinding on Windows
 ;;
