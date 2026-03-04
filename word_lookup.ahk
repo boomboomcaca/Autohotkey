@@ -113,46 +113,53 @@ g_WL_TtsWord := ""
   ; 使用 -OutputFile 参数让 PowerShell 直接以 UTF-8 写入结果文件
   psCmd := 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "' . ocrScript . '" -ImagePath "' . tempImg . '" -MouseX ' . relMouseX . ' -MouseY ' . relMouseY . ' -OutputFile "' . ocrResultFile . '"'
 
-  RunWait(psCmd, , "Hide")
+  Run(psCmd, , "Hide", &ocrPid)
+  SetTimer(CheckOcrResult, 100)
 
-  ; 清除提示
-  ToolTip()
+  CheckOcrResult() {
+    if ProcessExist(ocrPid)
+      return
+    SetTimer(CheckOcrResult, 0)
 
-  ; 10. 读取 OCR 结果
-  ocrOutput := ""
-  try {
-    ocrOutput := Trim(FileRead(ocrResultFile, "UTF-8"))
+    ; 清除提示
+    ToolTip()
+
+    ; 10. 读取 OCR 结果
+    ocrOutput := ""
+    try {
+      ocrOutput := Trim(FileRead(ocrResultFile, "UTF-8"))
+    }
+
+    if (ocrOutput = "") {
+      ToolTip("OCR 无结果（输出文件为空）")
+      SetTimer(ToolTip, -3000)
+      return
+    }
+
+    ; 11. 解析 JSON 结果
+    word := ""
+    line := ""
+    found := false
+
+    if (RegExMatch(ocrOutput, '"found"\s*:\s*true'))
+      found := true
+
+    if (found) {
+      if (RegExMatch(ocrOutput, '"word"\s*:\s*"((?:[^"\\]|\\.)*)"', &m))
+        word := m[1]
+      if (RegExMatch(ocrOutput, '"line"\s*:\s*"((?:[^"\\]|\\.)*)"', &m))
+        line := m[1]
+    }
+
+    if (!found || word = "") {
+      ToolTip("未识别到单词")
+      SetTimer(ToolTip, -2000)
+      return
+    }
+
+    ; 12. 显示浮窗并请求 Ollama
+    ShowWordPopup(word, line, mouseX, mouseY)
   }
-
-  if (ocrOutput = "") {
-    ToolTip("OCR 无结果（输出文件为空）")
-    SetTimer(ToolTip, -3000)
-    return
-  }
-
-  ; 11. 解析 JSON 结果
-  word := ""
-  line := ""
-  found := false
-
-  if (RegExMatch(ocrOutput, '"found"\s*:\s*true'))
-    found := true
-
-  if (found) {
-    if (RegExMatch(ocrOutput, '"word"\s*:\s*"((?:[^"\\]|\\.)*)"', &m))
-      word := m[1]
-    if (RegExMatch(ocrOutput, '"line"\s*:\s*"((?:[^"\\]|\\.)*)"', &m))
-      line := m[1]
-  }
-
-  if (!found || word = "") {
-    ToolTip("未识别到单词")
-    SetTimer(ToolTip, -2000)
-    return
-  }
-
-  ; 12. 显示浮窗并请求 Ollama
-  ShowWordPopup(word, line, mouseX, mouseY)
 }
 
 ; ===== 显示取词浮窗 =====
@@ -502,6 +509,7 @@ CloseWordGui()
 {
   global g_WL_Gui, g_WL_ResultCtrl, g_WL_TitleCtrl
   global g_WL_StreamPid, g_WL_Pending
+  global g_WL_TtsPlaying, g_WL_WordEdit, g_WL_ContextEdit
 
   ; 终止请求
   if (g_WL_StreamPid > 0) {

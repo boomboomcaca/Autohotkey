@@ -46,10 +46,14 @@ try {
                 byte[] srcB = new byte[bytes], dstB = new byte[bytes];
                 Marshal.Copy(srcD.Scan0, srcB, 0, bytes);
                 long total = 0;
-                for (int i = 0; i < bytes; i += 3) {
-                    byte g = (byte)(0.114*srcB[i] + 0.587*srcB[i+1] + 0.299*srcB[i+2]);
-                    dstB[i] = g; dstB[i+1] = g; dstB[i+2] = g;
-                    total += g;
+                for (int y = 0; y < h; y++) {
+                    int rowOffset = y * srcD.Stride;
+                    for (int x = 0; x < w * 3; x += 3) {
+                        int i = rowOffset + x;
+                        byte g = (byte)(0.114*srcB[i] + 0.587*srcB[i+1] + 0.299*srcB[i+2]);
+                        dstB[i] = g; dstB[i+1] = g; dstB[i+2] = g;
+                        total += g;
+                    }
                 }
                 if (total / (w * h) < 128) {
                     for (int i = 0; i < bytes; i++) dstB[i] = (byte)(255 - dstB[i]);
