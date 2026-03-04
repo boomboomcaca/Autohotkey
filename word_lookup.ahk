@@ -614,15 +614,17 @@ WL_PlayTtsLoop()
     WL_PregenTts(text)
   }
 
-  ; 等待预生成完成（最多等 3 秒）
-  if (g_WL_TtsPid > 0) {
-    waited := 0
-    while (g_WL_TtsPid > 0 && ProcessExist(g_WL_TtsPid) && waited < 3000) {
-      Sleep(100)
-      waited += 100
-    }
-    g_WL_TtsPid := 0
+  ; 非阻塞等待：edge-tts 还没跑完就 100ms 后重试，不阻塞主线程
+  ; 这样 WL_CheckTtsHover 可以正常运行，g_WL_TtsPlaying 保持准确
+  if (g_WL_TtsPid > 0 && ProcessExist(g_WL_TtsPid)) {
+    SetTimer(WL_PlayTtsLoop, -100)
+    return
   }
+  g_WL_TtsPid := 0
+
+  ; 再次确认鼠标仍在悬停（等待期间可能已经离开）
+  if (!g_WL_TtsPlaying)
+    return
 
   try {
     if FileExist(g_WL_TtsFile) {
