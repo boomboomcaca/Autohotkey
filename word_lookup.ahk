@@ -397,7 +397,7 @@ StartWordOllamaRequest(word, context)
   try FileDelete(jsonFile)
 
   ; JSON
-  json := '{"model":"huihui_ai/qwen3-abliterated:8b-v2","system":"' . sysPrompt . '","prompt":"' . prompt . '","stream":true,"options":{"temperature":0,"num_predict":800,"think":true}}'
+  json := '{"model":"huihui_ai/qwen3-abliterated:8b-v2","system":"' . sysPrompt . '","prompt":"' . prompt . '","stream":true,"options":{"temperature":0,"num_predict":800}}'
 
   try {
     FileAppend(json, jsonFile, "UTF-8-RAW")
