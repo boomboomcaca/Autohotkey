@@ -28,6 +28,8 @@ g_WL_TtsPlaying := false
 g_WL_TtsFile := ""
 g_WL_TtsPid := 0
 g_WL_TtsWord := ""
+g_WL_History := []
+g_WL_HistoryIdx := 0
 
 ; ===== 快捷键 Alt+F1 =====
 !F1::
@@ -35,12 +37,8 @@ g_WL_TtsWord := ""
   global g_WL_Gui, g_WL_ResultCtrl, g_WL_TitleCtrl
   global g_WL_StreamFile, g_WL_StreamPid, g_WL_Pending, g_WL_StreamContent
 
-  ; 如果浮窗已存在，先关闭
-  if (g_WL_Gui != "") {
-    CloseWordGui()
-  }
-
-  ; 1. 获取鼠标绝对坐标
+  ; 1. 获取鼠标全屏绝对坐标（很重要，防止在自身窗口上查词时获取到相对坐标）
+  CoordMode("Mouse", "Screen")
   MouseGetPos(&mouseX, &mouseY, &winUnder)
 
   ; 2. 以鼠标为中心截取固定区域（避免多显示器/DPI 下窗口坐标不准）
@@ -71,6 +69,8 @@ g_WL_TtsWord := ""
   ; 6. 截取屏幕区域
   screenRect := winX . "|" . winY . "|" . winW . "|" . winH
   pBitmap := Gdip_BitmapFromScreen(screenRect)
+
+  ; 不关闭旧窗口，以便截取到浮窗内部的内容，后续就地复用更新
 
   if (!pBitmap) {
     Gdip_Shutdown(pToken)
@@ -165,9 +165,32 @@ g_WL_TtsWord := ""
 ; ===== 显示取词浮窗 =====
 ShowWordPopup(word, context, posX, posY)
 {
-  global g_WL_Gui, g_WL_ResultCtrl, g_WL_TitleCtrl, g_WL_TtsIcon, g_WL_WordEdit, WL_CurrentWord, WL_CurrentContext, g_WL_LangMode, g_WL_LangBtn
+  global g_WL_Gui, g_WL_ResultCtrl, g_WL_TitleCtrl, g_WL_TtsIcon, g_WL_WordEdit, g_WL_ContextEdit, WL_CurrentWord, WL_CurrentContext, g_WL_LangMode, g_WL_LangBtn
   WL_CurrentWord := word
   WL_CurrentContext := context
+
+  if (g_WL_Gui != "") {
+    ; 如果窗口已存在，直接更新内容，不重新创建
+    g_WL_WordEdit.Value := word
+    g_WL_ContextEdit.Value := (context != "" && context != word) ? context : ""
+    g_WL_ResultCtrl.Value := "⏳ 正在查询..."
+
+    ; 重置悬停自动关闭的检测状态，防止刚更新完就消失
+    global g_WL_InitMouseX, g_WL_InitMouseY, g_WL_MouseMoved, g_WL_ShowTick
+    MouseGetPos(&g_WL_InitMouseX, &g_WL_InitMouseY)
+    g_WL_MouseMoved := false
+    g_WL_ShowTick := A_TickCount
+
+    ; 激活窗口，把焦点放在窗口上，保证快捷键可用
+    try WinActivate("ahk_id " . g_WL_Gui.Hwnd)
+
+    ; 预生成 TTS 音频（后台，会自动终止上一个）
+    WL_PregenTts(word)
+    ; 发起 Ollama 请求（会自动终止上一个）
+    StartWordOllamaRequest(word, context)
+    return
+  }
+
 
   g_WL_Gui := Gui("+AlwaysOnTop -Caption +Border +Owner")
   g_WL_Gui.BackColor := "FFFFFF"
@@ -238,10 +261,12 @@ ShowWordPopup(word, context, posX, posY)
   ; 移动到正确位置
   g_WL_Gui.Show("x" . showX . " y" . showY . " NoActivate")
 
-  ; 绑定 Esc 关闭 和 Enter 重新查询
+  ; 绑定 Esc/Enter 和历史记录导航
   HotIfWinActive("ahk_id " g_WL_Gui.Hwnd)
   Hotkey("Escape", WL_HandleEsc, "On")
   Hotkey("Enter", WL_HandleEnter, "On")
+  Hotkey("!Left", (*) => WL_NavHistory(-1), "On")
+  Hotkey("!Right", (*) => WL_NavHistory(1), "On")
   HotIfWinActive()
 
   ; 启动鼠标移出关闭的检测定时器
@@ -276,6 +301,7 @@ WL_HandleEnter(*)
   WL_CurrentContext := newContext
   if (g_WL_ResultCtrl != "")
     g_WL_ResultCtrl.Value := "⏳ 正在查询..."
+  WL_PregenTts(newWord)
   StartWordOllamaRequest(newWord, newContext)
 }
 
@@ -354,9 +380,30 @@ WL_ToggleLang()
 }
 
 ; ===== 发起 Ollama 语境解释请求 =====
-StartWordOllamaRequest(word, context)
+StartWordOllamaRequest(word, context, isNavigating := false)
 {
   global g_WL_StreamFile, g_WL_StreamPid, g_WL_Pending, g_WL_StreamContent, g_WL_LangMode
+  global g_WL_History, g_WL_HistoryIdx
+
+  ; 历史记录处理
+  if (!isNavigating) {
+    if (g_WL_HistoryIdx == 0 || g_WL_HistoryIdx > g_WL_History.Length || g_WL_History[g_WL_HistoryIdx].word != word || g_WL_History[g_WL_HistoryIdx].context != context) {
+      if (g_WL_HistoryIdx > 0 && g_WL_HistoryIdx < g_WL_History.Length) {
+        g_WL_History.RemoveAt(g_WL_HistoryIdx + 1, g_WL_History.Length - g_WL_HistoryIdx)
+      }
+      g_WL_History.Push({word: word, context: context, result: ""})
+      
+      ; 限制最多只保留 3 个历史记录
+      while (g_WL_History.Length > 3) {
+        g_WL_History.RemoveAt(1)
+      }
+      g_WL_HistoryIdx := g_WL_History.Length
+    } else {
+      ; 触发同样的查询（如切换语言），清空保存的旧结果
+      if (g_WL_HistoryIdx > 0 && g_WL_HistoryIdx <= g_WL_History.Length)
+        g_WL_History[g_WL_HistoryIdx].result := ""
+    }
+  }
 
   ; 终止之前的请求
   if (g_WL_StreamPid > 0) {
@@ -451,7 +498,13 @@ CheckWordResult()
       Sleep(100)
       finalResult := WL_ReadStreamContent(g_WL_StreamFile)
       if (finalResult != "" && g_WL_ResultCtrl != "") {
-        try g_WL_ResultCtrl.Value := finalResult
+        try {
+          g_WL_ResultCtrl.Value := finalResult
+          global g_WL_History, g_WL_HistoryIdx
+          if (g_WL_HistoryIdx > 0 && g_WL_HistoryIdx <= g_WL_History.Length) {
+            g_WL_History[g_WL_HistoryIdx].result := finalResult
+          }
+        }
       }
       g_WL_Pending := false
       SetTimer(CheckWordResult, 0)
@@ -530,6 +583,8 @@ CloseWordGui()
       HotIfWinActive("ahk_id " g_WL_Gui.Hwnd)
       Hotkey("Escape", WL_HandleEsc, "Off")
       Hotkey("Enter", WL_HandleEnter, "Off")
+      Hotkey("!Left", "Off")
+      Hotkey("!Right", "Off")
       HotIfWinActive()
     }
     try g_WL_Gui.Destroy()
@@ -636,4 +691,61 @@ WL_PlayTtsLoop()
     }
   } catch {
   }
+}
+
+; ===== 历史记录导航 =====
+WL_NavHistory(dir)
+{
+  global g_WL_History, g_WL_HistoryIdx, g_WL_WordEdit, g_WL_ContextEdit, g_WL_ResultCtrl
+  global WL_CurrentWord, WL_CurrentContext
+
+  if (g_WL_History.Length = 0)
+    return
+
+  newIdx := g_WL_HistoryIdx + dir
+  if (newIdx < 1)
+    newIdx := 1
+  if (newIdx > g_WL_History.Length)
+    newIdx := g_WL_History.Length
+
+  if (newIdx == g_WL_HistoryIdx)
+    return
+
+  g_WL_HistoryIdx := newIdx
+  item := g_WL_History[newIdx]
+
+  WL_CurrentWord := item.word
+  WL_CurrentContext := item.context
+
+  if (g_WL_WordEdit != "")
+    g_WL_WordEdit.Value := item.word
+  if (g_WL_ContextEdit != "")
+    g_WL_ContextEdit.Value := item.context
+
+  if (item.result != "") {
+    if (g_WL_ResultCtrl != "")
+      g_WL_ResultCtrl.Value := item.result
+    
+    ; 终止后台可能还在进行的请求，直接显示保存的结果
+    global g_WL_StreamPid, g_WL_Pending
+    if (g_WL_StreamPid > 0) {
+      try ProcessClose(g_WL_StreamPid)
+      g_WL_StreamPid := 0
+    }
+    g_WL_Pending := false
+    SetTimer(CheckWordResult, 0)
+
+  } else {
+    if (g_WL_ResultCtrl != "")
+      g_WL_ResultCtrl.Value := "⏳ 正在查询..."
+    StartWordOllamaRequest(item.word, item.context, true)
+  }
+
+  WL_PregenTts(item.word)
+
+  ; 导航操作视同活跃操作，重置自动关闭的计时器
+  global g_WL_InitMouseX, g_WL_InitMouseY, g_WL_MouseMoved, g_WL_ShowTick
+  MouseGetPos(&g_WL_InitMouseX, &g_WL_InitMouseY)
+  g_WL_MouseMoved := false
+  g_WL_ShowTick := A_TickCount
 }
