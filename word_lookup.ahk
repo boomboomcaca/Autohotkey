@@ -272,7 +272,7 @@ ShowWordPopup(word, context, posX, posY)
   ; 移动到正确位置
   g_WL_Gui.Show("x" . showX . " y" . showY . " NoActivate")
 
-  ; 绑定 Esc/Enter 和历史记录导航
+  ; 绑定 Esc/Enter、历史记录导航
   HotIfWinActive("ahk_id " g_WL_Gui.Hwnd)
   Hotkey("Escape", WL_HandleEsc, "On")
   Hotkey("Enter", WL_HandleEnter, "On")
@@ -656,8 +656,14 @@ WL_PregenTts(word)
     return
 
   g_WL_TtsWord := text
-  g_WL_TtsFile := A_Temp . "\ahk_wl_tts_audio.mp3"
-  try FileDelete(g_WL_TtsFile)
+  g_WL_TtsFile := A_Temp . "\ahk_wl_tts_" . A_TickCount . ".mp3"
+  
+  ; 顺便清理一下历史遗留的这种临时文件，防止堆积
+  try {
+    Loop Files, A_Temp . "\ahk_wl_tts_*.mp3"
+      if (A_LoopFileFullPath != g_WL_TtsFile)
+        FileDelete(A_LoopFileFullPath)
+  }
 
   escapedText := StrReplace(text, '"', '\"')
   try {
@@ -702,6 +708,57 @@ WL_PlayTtsLoop()
     }
   } catch {
   }
+}
+
+; ===== 强制单次朗读（右键触发） =====
+WL_PlayTtsOnce()
+{
+  global WL_CurrentWord, g_WL_TtsFile, g_WL_TtsPid, g_WL_TtsWord
+
+  text := Trim(WL_CurrentWord)
+  if (text = "")
+    return
+
+  if (text != g_WL_TtsWord) {
+    WL_PregenTts(text)
+  }
+
+  ; 非阻塞等待 edge-tts
+  if (g_WL_TtsPid > 0 && ProcessExist(g_WL_TtsPid)) {
+    SetTimer(WL_PlayTtsOnce, -100)
+    return
+  }
+  g_WL_TtsPid := 0
+
+  try {
+    if FileExist(g_WL_TtsFile) {
+      ; 打断上一次朗读
+      try SoundPlay("NonExistent.zzz")
+      SoundPlay(g_WL_TtsFile)
+    }
+  } catch {
+  }
+}
+
+; ===== 基于窗口存在的全局右键拦截防止菜单弹出 =====
+#HotIf WL_IsWordGuiShown()
+RButton::
+{
+  global g_WL_InitMouseX, g_WL_InitMouseY, g_WL_MouseMoved, g_WL_ShowTick
+  
+  ; 1. 朗读（非阻塞）
+  WL_PlayTtsOnce()
+  
+  ; 2. 重置自动关闭防抖动计时器（防止因触发而导致抖动退出）
+  MouseGetPos(&g_WL_InitMouseX, &g_WL_InitMouseY)
+  g_WL_MouseMoved := false
+  g_WL_ShowTick := A_TickCount
+}
+#HotIf
+
+WL_IsWordGuiShown() {
+  global g_WL_Gui
+  return (g_WL_Gui != "")
 }
 
 ; ===== 历史记录导航 =====
