@@ -145,10 +145,21 @@ g_WL_HistoryIdx := 0
       found := true
 
     if (found) {
-      if (RegExMatch(ocrOutput, '"word"\s*:\s*"((?:[^"\\]|\\.)*)"', &m))
+      if (RegExMatch(ocrOutput, 's)"word"\s*:\s*"(.*?)"\s*,\s*"line"', &m))
         word := m[1]
-      if (RegExMatch(ocrOutput, '"line"\s*:\s*"((?:[^"\\]|\\.)*)"', &m))
+      else if (RegExMatch(ocrOutput, '"word"\s*:\s*"((?:[^"\\]|\\.)*)"', &m))
+        word := m[1]
+
+      if (RegExMatch(ocrOutput, 's)"line"\s*:\s*"(.*?)"\s*}', &m))
         line := m[1]
+      else if (RegExMatch(ocrOutput, '"line"\s*:\s*"((?:[^"\\]|\\.)*)"', &m))
+        line := m[1]
+        
+      ; 清理解析出的转义符号，防止乱码
+      word := StrReplace(word, '\"', '"')
+      word := StrReplace(word, '\\', '\')
+      line := StrReplace(line, '\"', '"')
+      line := StrReplace(line, '\\', '\')
     }
 
     if (!found || word = "") {
@@ -213,7 +224,7 @@ ShowWordPopup(word, context, posX, posY)
   }
 
   ; 语境行（可编辑）
-  g_WL_Gui.SetFont("s9 c888888 Norm", "Microsoft YaHei")
+  g_WL_Gui.SetFont("s10 c444444 Norm", "Microsoft YaHei")
   g_WL_ContextEdit := g_WL_Gui.AddEdit("xs w320 -E0x200", (context != "" && context != word) ? context : "")
 
   ; 分隔线
