@@ -10,7 +10,6 @@ g_WL_ResultCtrl := ""
 g_WL_TitleCtrl := ""
 g_WL_WordEdit := ""
 g_WL_ContextEdit := ""
-g_WL_TtsIcon := ""
 WL_CurrentWord := ""
 WL_CurrentContext := ""
 g_WL_LangMode := "EN"
@@ -24,7 +23,6 @@ g_WL_ShowTick := 0
 g_WL_InitMouseX := 0
 g_WL_InitMouseY := 0
 g_WL_MouseMoved := false
-g_WL_TtsPlaying := false
 g_WL_TtsFile := ""
 g_WL_TtsPid := 0
 g_WL_TtsWord := ""
@@ -176,7 +174,7 @@ g_WL_HistoryIdx := 0
 ; ===== 显示取词浮窗 =====
 ShowWordPopup(word, context, posX, posY)
 {
-  global g_WL_Gui, g_WL_ResultCtrl, g_WL_TitleCtrl, g_WL_TtsIcon, g_WL_WordEdit, g_WL_ContextEdit, WL_CurrentWord, WL_CurrentContext, g_WL_LangMode, g_WL_LangBtn
+  global g_WL_Gui, g_WL_ResultCtrl, g_WL_TitleCtrl, g_WL_WordEdit, g_WL_ContextEdit, WL_CurrentWord, WL_CurrentContext, g_WL_LangMode, g_WL_LangBtn
   WL_CurrentWord := word
   WL_CurrentContext := context
 
@@ -211,9 +209,8 @@ ShowWordPopup(word, context, posX, posY)
   ; 标题行水平排列
   g_WL_Gui.SetFont("s14 c1a1a2e Bold", "Microsoft YaHei")
   
-  ; 单词可编辑输入框 + 朗读图标 + 中英切换按钮
+  ; 单词可编辑输入框 + 中英切换按钮
   g_WL_WordEdit := g_WL_Gui.AddEdit("w240 Section -E0x200", word)
-  g_WL_TtsIcon := g_WL_Gui.AddText("x+5 ys c888888", "🔊")
   
   g_WL_Gui.SetFont("s9 c333333 Norm", "Microsoft YaHei")
   g_WL_LangBtn := g_WL_Gui.AddButton("x+5 ys w40 h26", g_WL_LangMode = "EN" ? "EN" : "中")
@@ -286,7 +283,6 @@ ShowWordPopup(word, context, posX, posY)
   g_WL_MouseMoved := false
   g_WL_ShowTick := A_TickCount
   SetTimer(WL_CheckClickOutside, 200)
-  SetTimer(WL_CheckTtsHover, 100)
 
   ; 预生成 TTS 音频（后台，不阻塞）
   WL_PregenTts(word)
@@ -573,7 +569,7 @@ CloseWordGui()
 {
   global g_WL_Gui, g_WL_ResultCtrl, g_WL_TitleCtrl
   global g_WL_StreamPid, g_WL_Pending
-  global g_WL_TtsPlaying, g_WL_WordEdit, g_WL_ContextEdit
+  global g_WL_WordEdit, g_WL_ContextEdit
 
   ; 终止请求
   if (g_WL_StreamPid > 0) {
@@ -583,9 +579,6 @@ CloseWordGui()
   g_WL_Pending := false
   SetTimer(CheckWordResult, 0)
   SetTimer(WL_CheckClickOutside, 0)
-  SetTimer(WL_CheckTtsHover, 0)
-  SetTimer(WL_PlayTtsLoop, 0)
-  g_WL_TtsPlaying := false
   try SoundPlay("NonExistent.zzz")
 
   ; 销毁 GUI
@@ -605,39 +598,6 @@ CloseWordGui()
     g_WL_WordEdit := ""
     g_WL_ContextEdit := ""
   }
-}
-
-; ===== 鼠标悬停朗读检测 =====
-WL_CheckTtsHover()
-{
-  global g_WL_Gui, g_WL_TtsIcon, g_WL_TtsPlaying, WL_CurrentWord
-  static lastHover := false
-
-  if (g_WL_Gui = "") {
-    SetTimer(WL_CheckTtsHover, 0)
-    return
-  }
-
-  isHover := false
-  try {
-    MouseGetPos(&mx, &my, &winUnder, &ctrlUnder, 2)
-    if (ctrlUnder = g_WL_TtsIcon.Hwnd)
-      isHover := true
-  } catch {
-  }
-
-  if (isHover && !lastHover) {
-    g_WL_TtsPlaying := true
-    SetTimer(WL_PlayTtsLoop, -10)
-  } else if (!isHover && lastHover) {
-    g_WL_TtsPlaying := false
-    SetTimer(WL_PlayTtsLoop, 0)
-    try {
-      SoundPlay("NonExistent.zzz")
-    }
-  }
-  
-  lastHover := isHover
 }
 
 ; ===== 预生成 TTS 音频（后台） =====
@@ -669,44 +629,6 @@ WL_PregenTts(word)
   try {
     Run('edge-tts --voice en-US-AriaNeural --text "' . escapedText . '" --write-media "' . g_WL_TtsFile . '"', , "Hide", &outPid)
     g_WL_TtsPid := outPid
-  }
-}
-
-WL_PlayTtsLoop()
-{
-  global g_WL_TtsPlaying, WL_CurrentWord, g_WL_TtsFile, g_WL_TtsPid, g_WL_TtsWord
-
-  if (!g_WL_TtsPlaying || WL_CurrentWord = "")
-    return
-
-  text := Trim(WL_CurrentWord)
-
-  ; 如果单词变了，重新生成
-  if (text != g_WL_TtsWord) {
-    WL_PregenTts(text)
-  }
-
-  ; 非阻塞等待：edge-tts 还没跑完就 100ms 后重试，不阻塞主线程
-  ; 这样 WL_CheckTtsHover 可以正常运行，g_WL_TtsPlaying 保持准确
-  if (g_WL_TtsPid > 0 && ProcessExist(g_WL_TtsPid)) {
-    SetTimer(WL_PlayTtsLoop, -100)
-    return
-  }
-  g_WL_TtsPid := 0
-
-  ; 再次确认鼠标仍在悬停（等待期间可能已经离开）
-  if (!g_WL_TtsPlaying)
-    return
-
-  try {
-    if FileExist(g_WL_TtsFile) {
-      SoundPlay(g_WL_TtsFile, "Wait")
-
-      ; 播放完毕后如果还在悬停并且窗口还在，继续播放
-      if (g_WL_TtsPlaying && g_WL_Gui != "")
-        SetTimer(WL_PlayTtsLoop, -100)
-    }
-  } catch {
   }
 }
 
