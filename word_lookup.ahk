@@ -451,8 +451,8 @@ StartWordOllamaRequest(word, context, isNavigating := false)
   prompt := StrReplace(prompt, "`t", "\t")
 
   ; 设置文件
-  g_WL_StreamFile := A_Temp . "\ollama_stream_word.txt"
-  jsonFile := A_Temp . "\ollama_request_word.json"
+  g_WL_StreamFile := A_Temp . "\ahk_wl_stream_word.txt"
+  jsonFile := A_Temp . "\ahk_wl_request_word.json"
 
   try FileDelete(g_WL_StreamFile)
   try FileDelete(jsonFile)
@@ -466,23 +466,23 @@ StartWordOllamaRequest(word, context, isNavigating := false)
     return
   }
 
-  ; 使用公用脚本发起流式请求
-  psFile := A_ScriptDir . "\ollama_stream.ps1"
+  ; 弃用耗时的 PowerShell，改用 Windows 内置极速 curl.exe，彻底消除冷启动延迟
   try {
-    Run('powershell.exe -NoProfile -ExecutionPolicy Bypass -File "' . psFile . '" -JsonFile "' . jsonFile . '" -OutputFile "' . g_WL_StreamFile . '"', , "Hide", &outPid)
+    curlCmd := 'curl.exe -s -N -X POST "http://localhost:11434/api/generate" -H "Content-Type: application/json" -d "@' . jsonFile . '" -o "' . g_WL_StreamFile . '"'
+    Run(curlCmd, , "Hide", &outPid)
     g_WL_StreamPid := outPid
   } catch {
     return
   }
 
-  ; 启动轮询
-  SetTimer(CheckWordResult, 200)
+  ; 启动极速轮询
+  SetTimer(CheckWordResult, 50)
 }
 
 ; ===== 轮询 Ollama 结果 =====
 CheckWordResult()
 {
-  global g_WL_Pending, g_WL_StreamFile, g_WL_StreamContent
+  global g_WL_Pending, g_WL_StreamFile, g_WL_StreamContent, g_WL_StreamPid
   global g_WL_ResultCtrl, g_WL_Gui
 
   if (!g_WL_Pending || g_WL_Gui = "") {
@@ -500,21 +500,33 @@ CheckWordResult()
       }
     }
 
-    ; 检查是否完成
-    if (IsStreamComplete(g_WL_StreamFile)) {
-      Sleep(100)
+    ; 检查 curl 进程是否结束
+    isComplete := false
+    if (g_WL_StreamPid > 0 && !ProcessExist(g_WL_StreamPid)) {
+      isComplete := true
+    }
+
+    if (isComplete) {
+      Sleep(30) ; 等待文件最终刷入硬盘
       finalResult := WL_ReadStreamContent(g_WL_StreamFile)
-      if (finalResult != "" && g_WL_ResultCtrl != "") {
-        try {
-          g_WL_ResultCtrl.Value := finalResult
-          global g_WL_History, g_WL_HistoryIdx
-          if (g_WL_HistoryIdx > 0 && g_WL_HistoryIdx <= g_WL_History.Length) {
-            g_WL_History[g_WL_HistoryIdx].result := finalResult
-          }
+      if (finalResult != "") {
+        if (g_WL_ResultCtrl != "") {
+          try g_WL_ResultCtrl.Value := finalResult
+        }
+        global g_WL_History, g_WL_HistoryIdx
+        if (g_WL_HistoryIdx > 0 && g_WL_HistoryIdx <= g_WL_History.Length) {
+          g_WL_History[g_WL_HistoryIdx].result := finalResult
         }
       }
+      
+      ; 状态重置与收尾清理
       g_WL_Pending := false
+      g_WL_StreamPid := 0
       SetTimer(CheckWordResult, 0)
+      
+      ; 阅后即焚，清理临时文件
+      try FileDelete(g_WL_StreamFile)
+      try FileDelete(A_Temp . "\ahk_wl_request_word.json")
     }
   }
 }
@@ -568,7 +580,7 @@ WL_ReadStreamContent(filePath)
 CloseWordGui()
 {
   global g_WL_Gui, g_WL_ResultCtrl, g_WL_TitleCtrl
-  global g_WL_StreamPid, g_WL_Pending
+  global g_WL_StreamPid, g_WL_Pending, g_WL_StreamFile
   global g_WL_WordEdit, g_WL_ContextEdit
 
   ; 终止请求
@@ -580,6 +592,10 @@ CloseWordGui()
   SetTimer(CheckWordResult, 0)
   SetTimer(WL_CheckClickOutside, 0)
   try SoundPlay("NonExistent.zzz")
+
+  ; 彻底清理临时文件
+  try FileDelete(g_WL_StreamFile)
+  try FileDelete(A_Temp . "\ahk_wl_request_word.json")
 
   ; 销毁 GUI
   if (g_WL_Gui != "") {
