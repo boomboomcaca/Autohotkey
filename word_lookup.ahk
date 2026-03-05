@@ -210,7 +210,7 @@ ShowWordPopup(word, context, posX, posY)
   g_WL_Gui.SetFont("s14 c1a1a2e Bold", "Microsoft YaHei")
   
   ; 单词可编辑输入框 + 中英切换按钮
-  g_WL_WordEdit := g_WL_Gui.AddEdit("w240 Section -E0x200", word)
+  g_WL_WordEdit := g_WL_Gui.AddEdit("w275 Section -E0x200", word)
   
   g_WL_Gui.SetFont("s9 c333333 Norm", "Microsoft YaHei")
   g_WL_LangBtn := g_WL_Gui.AddButton("x+5 ys w40 h26", g_WL_LangMode = "EN" ? "EN" : "中")
