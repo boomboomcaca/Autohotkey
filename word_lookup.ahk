@@ -29,8 +29,8 @@ g_WL_TtsWord := ""
 g_WL_History := []
 g_WL_HistoryIdx := 0
 
-; ===== 快捷键 Alt+F1 =====
-!F1::
+; ===== 快捷键 F2 =====
+F2::
 {
   global g_WL_Gui, g_WL_ResultCtrl, g_WL_TitleCtrl
   global g_WL_StreamFile, g_WL_StreamPid, g_WL_Pending, g_WL_StreamContent
@@ -627,7 +627,7 @@ WL_PregenTts(word)
 
   escapedText := StrReplace(text, '"', '\"')
   try {
-    Run('edge-tts --voice en-US-AriaNeural --text "' . escapedText . '" --write-media "' . g_WL_TtsFile . '"', , "Hide", &outPid)
+    Run('edge-tts --voice en-US-AriaNeural --volume=+200% --text "' . escapedText . '" --write-media "' . g_WL_TtsFile . '"', , "Hide", &outPid)
     g_WL_TtsPid := outPid
   }
 }
