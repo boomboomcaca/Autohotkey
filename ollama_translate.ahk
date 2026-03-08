@@ -215,7 +215,7 @@ ShowMainGui(original)
   g_MainGui.AddText("xs w40 Section", "问题:")
   g_TtsQuestionCtrl := g_MainGui.AddText("x+5 ys cGray", "🔊")
   g_TtsQuestionCtrl.OnEvent("Click", Gui_PlayQuestion)
-  g_QuestionEditCtrl := g_MainGui.AddEdit("xs w330 h50", "")
+  g_QuestionEditCtrl := g_MainGui.AddEdit("xs w330 h50", original)
   g_SendBtnCtrl := g_MainGui.AddButton("x+5 yp h50 w60", "发送")
   g_SendBtnCtrl.OnEvent("Click", Gui_SendQuestion)
   g_MainGui.AddText("xs w400", "回答:")
@@ -729,6 +729,8 @@ Gui_Close(guiObj, *)
         try g_ExplainEditCtrl.Value := ""
       if (g_AnswerEditCtrl != "")
         try g_AnswerEditCtrl.Value := ""
+      if (g_QuestionEditCtrl != "")
+        try g_QuestionEditCtrl.Value := text
       g_TranslateEditCtrl.Value := "正在处理..."
       g_CorrectEditCtrl.Value := "正在处理..."
       StartAsyncRequests(text, "default")
