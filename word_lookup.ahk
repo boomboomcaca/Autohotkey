@@ -2,7 +2,8 @@
 ; 鼠标取词 + 语境解释 - Alt+W：截取鼠标所在窗口 → Windows OCR → 定位单词 → Ollama 解释
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-#Include "Gdip_All.ahk"
+#Include "UIA.ahk"
+#Include "OCR.ahk"
 
 ; ===== 全局变量 =====
 g_WL_Gui := ""
@@ -35,140 +36,127 @@ F2::
   global g_WL_Gui, g_WL_ResultCtrl, g_WL_TitleCtrl
   global g_WL_StreamFile, g_WL_StreamPid, g_WL_Pending, g_WL_StreamContent
 
-  ; 1. 获取鼠标全屏绝对坐标（很重要，防止在自身窗口上查词时获取到相对坐标）
   CoordMode("Mouse", "Screen")
-  MouseGetPos(&mouseX, &mouseY, &winUnder)
+  MouseGetPos(&mouseX, &mouseY, &winUnder, &ctlUnder)
 
-  ; 2. 以鼠标为中心截取固定区域（避免多显示器/DPI 下窗口坐标不准）
-  dpi := 96
-  try dpi := DllCall("GetDpiForWindow", "Ptr", winUnder, "UInt")
-  if (dpi < 96)
-    dpi := 96
-  scale := dpi / 96
-  captureW := Round(600 * scale)
-  captureH := Round(400 * scale)
-  winX := mouseX - Round(captureW / 2)
-  winY := mouseY - Round(captureH / 2)
-  winW := captureW
-  winH := captureH
+  word := ""
+  line := ""
+  found := false
 
-  ; 3. 计算鼠标在截图中的相对坐标（始终在中心）
-  relMouseX := mouseX - winX
-  relMouseY := mouseY - winY
+  ; ==========================================================
+  ; 【优先级 1】: UIA (UI Automation) - 内存直读，0延迟，100% 准确
+  ; ==========================================================
+  try {
+    el := UIA.ElementFromPoint(mouseX, mouseY)
+    if (el) {
+      if (el.IsTextPatternAvailable) {
+        textPattern := el.TextPattern
+        range := textPattern.RangeFromPoint(mouseX, mouseY)
+        if (range) {
+          lineRange := range.Clone()
+          range.ExpandToEnclosingUnit(UIA.TextUnit.Word)
+          rawWord := range.GetText()
+          
+          lineRange.ExpandToEnclosingUnit(UIA.TextUnit.Line)
+          rawLine := lineRange.GetText()
 
-  ; 5. 启动 GDI+
-  pToken := Gdip_Startup()
-  if (!pToken) {
-    ToolTip("GDI+ 启动失败")
-    SetTimer(ToolTip, -2000)
-    return
+          cleanedWord := RegExReplace(rawWord, "[^\w\x{4e00}-\x{9fa5}\-]", "")
+          if (cleanedWord != "") {
+            word := cleanedWord
+            line := rawLine
+            found := true
+          }
+        }
+      }
+      if (!found && el.Name != "") {
+        cleanedWord := RegExReplace(el.Name, "[^\w\x{4e00}-\x{9fa5}\-]", "")
+        if (cleanedWord != "" && StrLen(cleanedWord) < 50) {
+          word := cleanedWord
+          line := el.Name
+          found := true
+        }
+      }
+    }
+  } catch {
   }
 
-  ; 6. 截取屏幕区域
-  screenRect := winX . "|" . winY . "|" . winW . "|" . winH
-  pBitmap := Gdip_BitmapFromScreen(screenRect)
-
-  ; 不关闭旧窗口，以便截取到浮窗内部的内容，后续就地复用更新
-
-  if (!pBitmap) {
-    Gdip_Shutdown(pToken)
-    ToolTip("截图失败")
-    SetTimer(ToolTip, -2000)
-    return
-  }
-
-  ; 7. 放大 2 倍以提升 OCR 准确率
-  ocrScale := 2
-  origW := Gdip_GetImageWidth(pBitmap)
-  origH := Gdip_GetImageHeight(pBitmap)
-  newW := origW * ocrScale
-  newH := origH * ocrScale
-  pBitmapScaled := Gdip_CreateBitmap(newW, newH)
-  G := Gdip_GraphicsFromImage(pBitmapScaled)
-  Gdip_SetInterpolationMode(G, 7)  ; HighQualityBicubic
-  Gdip_DrawImage(G, pBitmap, 0, 0, newW, newH, 0, 0, origW, origH)
-  Gdip_DeleteGraphics(G)
-  Gdip_DisposeImage(pBitmap)
-
-  ; 8. 保存为临时 PNG
-  tempImg := A_Temp . "\ahk_word_capture.png"
-  Gdip_SaveBitmapToFile(pBitmapScaled, tempImg)
-  Gdip_DisposeImage(pBitmapScaled)
-  Gdip_Shutdown(pToken)
-
-  ; 鼠标坐标同步放大
-  relMouseX := relMouseX * ocrScale
-  relMouseY := relMouseY * ocrScale
-
-  ; 9. 显示"正在识别..."提示
-  ToolTip("🔍 正在识别...")
-
-  ; 10. 调用 PowerShell OCR 脚本（同步等待结果）
-  ocrScript := A_ScriptDir . "\ocr_word.ps1"
-  ocrResultFile := A_Temp . "\ahk_ocr_result.txt"
-  try FileDelete(ocrResultFile)
-
-  ; 使用 -OutputFile 参数让 PowerShell 直接以 UTF-8 写入结果文件
-  psCmd := 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "' . ocrScript . '" -ImagePath "' . tempImg . '" -MouseX ' . relMouseX . ' -MouseY ' . relMouseY . ' -OutputFile "' . ocrResultFile . '" -DebugLog'
-
-  Run(psCmd, , "Hide", &ocrPid)
-  SetTimer(CheckOcrResult, 100)
-
-  CheckOcrResult() {
-    if ProcessExist(ocrPid)
-      return
-    SetTimer(CheckOcrResult, 0)
-
-    ; 清除提示
-    ToolTip()
-
-    ; 10. 读取 OCR 结果
-    ocrOutput := ""
+  ; ==========================================================
+  ; 【优先级 2】: Windows 10/11 原生 WinRT OCR API - 屏幕极速截取
+  ; ==========================================================
+  if (!found) {
+    ToolTip("🔍 画面分析中...")
     try {
-      ocrOutput := Trim(FileRead(ocrResultFile, "UTF-8"))
-    }
-
-    if (ocrOutput = "") {
-      ToolTip("OCR 无结果（输出文件为空）")
-      SetTimer(ToolTip, -3000)
-      return
-    }
-
-    ; 11. 解析 JSON 结果
-    word := ""
-    line := ""
-    found := false
-
-    if (RegExMatch(ocrOutput, '"found"\s*:\s*true'))
-      found := true
-
-    if (found) {
-      if (RegExMatch(ocrOutput, 's)"word"\s*:\s*"(.*?)"\s*,\s*"line"', &m))
-        word := m[1]
-      else if (RegExMatch(ocrOutput, '"word"\s*:\s*"((?:[^"\\]|\\.)*)"', &m))
-        word := m[1]
-
-      if (RegExMatch(ocrOutput, 's)"line"\s*:\s*"(.*?)"\s*}', &m))
-        line := m[1]
-      else if (RegExMatch(ocrOutput, '"line"\s*:\s*"((?:[^"\\]|\\.)*)"', &m))
-        line := m[1]
+      dpi := 96
+      try dpi := DllCall("GetDpiForWindow", "Ptr", winUnder, "UInt")
+      if (dpi < 96)
+        dpi := 96
+      scale := 1 ; WinRT OCR 不需要强制放大，原生支持得很好
+      captureW := Round(600 * scale)
+      captureH := Round(400 * scale)
+      winX := mouseX - Round(captureW / 2)
+      winY := mouseY - Round(captureH / 2)
+      
+      ; 调用 WinRT OCR 库局部截屏取词 (优先尝试英语，若系统没装英文包则自动回退到系统可用语言并提示)
+      try {
+        ocrResult := OCR.FromRect(winX, winY, captureW, captureH, {Language: "en-US"})
+      } catch {
+        ToolTip("⚠️ 系统缺失英文OCR语言包，已自动降级为默认语言！`n请在 Windows 设置 -> 语言 中添加【English (United States)】并勾选【光学字符识别】！")
+        SetTimer(ToolTip, -5000)
+        ocrResult := OCR.FromRect(winX, winY, captureW, captureH)
+      }
+      
+      if (ocrResult) {
+        bestDist := 999999
+        bestWord := ""
+        bestLine := ""
         
-      ; 清理解析出的转义符号，防止乱码
-      word := StrReplace(word, '\"', '"')
-      word := StrReplace(word, '\\', '\')
-      line := StrReplace(line, '\"', '"')
-      line := StrReplace(line, '\\', '\')
-    }
-
-    if (!found || word = "") {
-      ToolTip("未识别到单词")
+        for ocrLine in ocrResult.Lines {
+          for ocrWord in ocrLine.Words {
+            cx := ocrWord.x + ocrWord.w / 2
+            cy := ocrWord.y + ocrWord.h / 2
+            dist := Sqrt((mouseX - cx)**2 + (mouseY - cy)**2)
+            
+            if (mouseX >= ocrWord.x && mouseX <= ocrWord.x + ocrWord.w && mouseY >= ocrWord.y && mouseY <= ocrWord.y + ocrWord.h) {
+              bestWord := ocrWord.Text
+              bestLine := ocrLine.Text
+              bestDist := 0
+              break
+            }
+            
+            if (dist < bestDist) {
+              bestDist := dist
+              bestWord := ocrWord.Text
+              bestLine := ocrLine.Text
+            }
+          }
+          if (bestDist == 0)
+            break
+        }
+        
+        if (bestWord != "") {
+          bestWord := RegExReplace(bestWord, "[^\w\x{4e00}-\x{9fa5}\-]", "")
+          if (bestWord != "") {
+            word := bestWord
+            line := bestLine
+            found := true
+          }
+        }
+      }
+    } catch as err {
+      ToolTip("OCR 失败: " err.Message)
       SetTimer(ToolTip, -2000)
       return
     }
-
-    ; 12. 显示浮窗并请求 Ollama
-    ShowWordPopup(word, line, mouseX, mouseY)
+    ToolTip()
   }
+
+  if (!found || word = "") {
+    ToolTip("未识别到单词")
+    SetTimer(ToolTip, -2000)
+    return
+  }
+
+  ShowWordPopup(word, line, mouseX, mouseY)
 }
 
 ; ===== 显示取词浮窗 =====
