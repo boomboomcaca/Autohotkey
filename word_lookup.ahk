@@ -55,25 +55,30 @@ F2::
         if (range) {
           lineRange := range.Clone()
           range.ExpandToEnclosingUnit(UIA.TextUnit.Word)
-          rawWord := range.GetText()
+          rawWord := Trim(range.GetText())
           
           lineRange.ExpandToEnclosingUnit(UIA.TextUnit.Line)
-          rawLine := lineRange.GetText()
+          rawLine := Trim(lineRange.GetText())
 
-          cleanedWord := RegExReplace(rawWord, "[^\w\x{4e00}-\x{9fa5}\-]", "")
-          if (cleanedWord != "") {
-            word := cleanedWord
-            line := rawLine
-            found := true
+          if (rawWord != "" && !RegExMatch(rawWord, "\s")) {
+            cleanedWord := RegExReplace(rawWord, "^[^\w\x{4e00}-\x{9fa5}\-]+|[^\w\x{4e00}-\x{9fa5}\-]+$", "")
+            if (cleanedWord != "") {
+              word := cleanedWord
+              line := rawLine
+              found := true
+            }
           }
         }
       }
       if (!found && el.Name != "") {
-        cleanedWord := RegExReplace(el.Name, "[^\w\x{4e00}-\x{9fa5}\-]", "")
-        if (cleanedWord != "" && StrLen(cleanedWord) < 50) {
-          word := cleanedWord
-          line := el.Name
-          found := true
+        rawName := Trim(el.Name)
+        if (rawName != "" && !RegExMatch(rawName, "\s") && StrLen(rawName) < 50) {
+          cleanedWord := RegExReplace(rawName, "^[^\w\x{4e00}-\x{9fa5}\-]+|[^\w\x{4e00}-\x{9fa5}\-]+$", "")
+          if (cleanedWord != "") {
+            word := cleanedWord
+            line := rawName
+            found := true
+          }
         }
       }
     }
@@ -134,9 +139,10 @@ F2::
         }
         
         if (bestWord != "") {
-          bestWord := RegExReplace(bestWord, "[^\w\x{4e00}-\x{9fa5}\-]", "")
-          if (bestWord != "") {
-            word := bestWord
+          bestWord := Trim(bestWord)
+          cleanedWord := RegExReplace(bestWord, "^[^\w\x{4e00}-\x{9fa5}\-]+|[^\w\x{4e00}-\x{9fa5}\-]+$", "")
+          if (cleanedWord != "") {
+            word := cleanedWord
             line := bestLine
             found := true
           }
