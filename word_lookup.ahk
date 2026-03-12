@@ -57,8 +57,8 @@ F2::
           range.ExpandToEnclosingUnit(UIA.TextUnit.Word)
           rawWord := Trim(range.GetText())
           
-          lineRange.ExpandToEnclosingUnit(UIA.TextUnit.Line)
-          rawLine := Trim(lineRange.GetText())
+          lineRange.ExpandToEnclosingUnit(UIA.TextUnit.Paragraph)
+          rawLine := RegExReplace(Trim(lineRange.GetText()), "s)[\r\n]+", " ") ; 替换换行符为空格，保持单行结构传给 Ollama
 
           if (rawWord != "" && !RegExMatch(rawWord, "\s")) {
             cleanedWord := RegExReplace(rawWord, "^[^\w\x{4e00}-\x{9fa5}\-]+|[^\w\x{4e00}-\x{9fa5}\-]+$", "")
@@ -116,26 +116,72 @@ F2::
         bestLine := ""
         
         for ocrLine in ocrResult.Lines {
-          for ocrWord in ocrLine.Words {
+          for index, ocrWord in ocrLine.Words {
             cx := ocrWord.x + ocrWord.w / 2
             cy := ocrWord.y + ocrWord.h / 2
             dist := Sqrt((mouseX - cx)**2 + (mouseY - cy)**2)
             
             if (mouseX >= ocrWord.x && mouseX <= ocrWord.x + ocrWord.w && mouseY >= ocrWord.y && mouseY <= ocrWord.y + ocrWord.h) {
               bestWord := ocrWord.Text
-              bestLine := ocrLine.Text
               bestDist := 0
+              bestIndex := index
+              bestLineIndex := A_Index
+              bestLineObj := ocrLine
               break
             }
             
             if (dist < bestDist) {
               bestDist := dist
               bestWord := ocrWord.Text
-              bestLine := ocrLine.Text
+              bestIndex := index
+              bestLineIndex := A_Index
+              bestLineObj := ocrLine
             }
           }
           if (bestDist == 0)
             break
+        }
+        
+        ; 收集上下文行 (向上最多取2行，向下最多取2行)
+        bestLine := ""
+        if (IsSet(bestLineIndex)) {
+          startLineIdx := Max(1, bestLineIndex - 2)
+          endLineIdx := Min(ocrResult.Lines.Length, bestLineIndex + 2)
+          for i, lObj in ocrResult.Lines {
+            if (i >= startLineIdx && i <= endLineIdx) {
+              bestLine .= (bestLine=""?"":" ") . lObj.Text
+            }
+          }
+        }
+        
+        ; 尝试合并紧邻的单词结块 (譬如 OpenClaw 被 OCR 分拆为了 Open 和 Claw)
+        if (bestWord != "" && IsSet(bestLineObj)) {
+            ; 往前合并
+            tempIndex := bestIndex - 1
+            while (tempIndex > 0) {
+                prevWord := bestLineObj.Words[tempIndex]
+                currWord := bestLineObj.Words[tempIndex + 1]
+                ; 判断间距小于 4 像素 (紧密相连)，则属于被误拆分的一个词
+                if (currWord.x - (prevWord.x + prevWord.w) <= 4) {
+                    bestWord := prevWord.Text . bestWord
+                    tempIndex--
+                } else {
+                    break
+                }
+            }
+            ; 往后合并
+            tempIndex := bestIndex + 1
+            while (tempIndex <= bestLineObj.Words.Length) {
+                nextWord := bestLineObj.Words[tempIndex]
+                currWord := bestLineObj.Words[tempIndex - 1]
+                ; 与后一个单词紧密相连
+                if (nextWord.x - (currWord.x + currWord.w) <= 4) {
+                    bestWord := bestWord . nextWord.Text
+                    tempIndex++
+                } else {
+                    break
+                }
+            }
         }
         
         if (bestWord != "") {
