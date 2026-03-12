@@ -5,7 +5,8 @@ param(
     [Parameter(Mandatory = $true)][string]$ImagePath,
     [Parameter(Mandatory = $true)][int]$MouseX,
     [Parameter(Mandatory = $true)][int]$MouseY,
-    [string]$OutputFile = ""
+    [string]$OutputFile = "",
+    [switch]$DebugLog
 )
 
 # 输出函数：写入文件（UTF-8）或标准输出
@@ -74,7 +75,7 @@ try {
     [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
     # 调用 Tesseract 输出 TSV 格式（包含每个单词的坐标）
-    $tsvOutput = & $tesseractPath $processedPath stdout -l eng+chi_sim --psm 3 tsv 2>$null
+    $tsvOutput = & $tesseractPath $processedPath stdout -l eng+chi_sim --psm 11 tsv 2>$null
 
     # 恢复编码
     [Console]::OutputEncoding = $prevEncoding
@@ -125,6 +126,24 @@ try {
         $lines[$lineNum] += $text
     }
 
+    # 调试模式：输出所有识别到的单词及坐标到日志文件
+    if ($DebugLog) {
+        $debugPath = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "ahk_ocr_debug.log")
+        $debugLines = @()
+        $debugLines += "=== OCR Debug Log ==="
+        $debugLines += "Time: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+        $debugLines += "Image: $ImagePath"
+        $debugLines += "Mouse: X=$MouseX, Y=$MouseY"
+        $debugLines += "Words found: $($words.Count)"
+        $debugLines += "--- All words ---"
+        foreach ($w in $words) {
+            $debugLines += "  [$($w.Text)] L=$($w.Left) T=$($w.Top) R=$($w.Right) B=$($w.Bottom) Line=$($w.Line)"
+        }
+        $debugLines += "--- TSV raw (first 50 lines) ---"
+        $tsvOutput | Select-Object -First 50 | ForEach-Object { $debugLines += "  $_" }
+        [System.IO.File]::WriteAllLines($debugPath, $debugLines, [System.Text.Encoding]::UTF8)
+    }
+
     if ($words.Count -eq 0) {
         WriteResult '{"found":false,"error":"no words recognized"}'
         exit 0
@@ -144,10 +163,10 @@ try {
         }
     }
 
-    # 第二遍：最近距离匹配（同行内最近的单词）
+    # 第二遍：最近距离匹配（同行内最近的单词，垂直容差 20px）
     if (-not $foundWord) {
         $minDist = [double]::MaxValue
-        $vPadding = 10
+        $vPadding = 20
         foreach ($w in $words) {
             if ($MouseY -ge ($w.Top - $vPadding) -and $MouseY -le ($w.Bottom + $vPadding)) {
                 $cx = ($w.Left + $w.Right) / 2
@@ -159,6 +178,35 @@ try {
                 }
             }
         }
+    }
+
+    # 第三遍：全局最近词回退（欧几里得距离，限制最大 100px）
+    if (-not $foundWord) {
+        $minDist = [double]::MaxValue
+        $maxGlobalDist = 100
+        foreach ($w in $words) {
+            $cx = ($w.Left + $w.Right) / 2
+            $cy = ($w.Top + $w.Bottom) / 2
+            $dist = [Math]::Sqrt(($MouseX - $cx) * ($MouseX - $cx) + ($MouseY - $cy) * ($MouseY - $cy))
+            if ($dist -lt $minDist -and $dist -le $maxGlobalDist) {
+                $minDist = $dist
+                $foundWord = $w.Text
+                $foundLine = ($lines[$w.Line] -join " ")
+            }
+        }
+    }
+
+    # 调试模式：输出匹配结果
+    if ($DebugLog) {
+        $debugPath = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "ahk_ocr_debug.log")
+        $appendLines = @()
+        $appendLines += "--- Match result ---"
+        if ($foundWord) {
+            $appendLines += "  FOUND: [$foundWord] line=[$foundLine]"
+        } else {
+            $appendLines += "  NOT FOUND: no word at cursor position"
+        }
+        [System.IO.File]::AppendAllText($debugPath, "`r`n" + ($appendLines -join "`r`n"), [System.Text.Encoding]::UTF8)
     }
 
     if ($foundWord) {
