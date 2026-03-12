@@ -28,47 +28,9 @@ try {
 
     $absPath = (Resolve-Path $ImagePath).Path
 
-    # 图片预处理：灰度化 + 深色背景自动反色（使用 C# 编译代码，毫秒级处理）
-    Add-Type -AssemblyName System.Drawing
-    Add-Type -Language CSharp -TypeDefinition @"
-    using System;
-    using System.Drawing;
-    using System.Drawing.Imaging;
-    using System.Runtime.InteropServices;
-    public static class OcrPreprocess {
-        public static void GrayAndAutoInvert(string src, string dst) {
-            using (var bmp = new Bitmap(src)) {
-                int w = bmp.Width, h = bmp.Height;
-                var result = new Bitmap(w, h, PixelFormat.Format24bppRgb);
-                var rect = new Rectangle(0, 0, w, h);
-                var srcD = bmp.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
-                var dstD = result.LockBits(rect, ImageLockMode.WriteOnly, PixelFormat.Format24bppRgb);
-                int bytes = srcD.Stride * h;
-                byte[] srcB = new byte[bytes], dstB = new byte[bytes];
-                Marshal.Copy(srcD.Scan0, srcB, 0, bytes);
-                long total = 0;
-                for (int y = 0; y < h; y++) {
-                    int rowOffset = y * srcD.Stride;
-                    for (int x = 0; x < w * 3; x += 3) {
-                        int i = rowOffset + x;
-                        byte g = (byte)(0.114*srcB[i] + 0.587*srcB[i+1] + 0.299*srcB[i+2]);
-                        dstB[i] = g; dstB[i+1] = g; dstB[i+2] = g;
-                        total += g;
-                    }
-                }
-                if (total / (w * h) < 128) {
-                    for (int i = 0; i < bytes; i++) dstB[i] = (byte)(255 - dstB[i]);
-                }
-                Marshal.Copy(dstB, 0, dstD.Scan0, bytes);
-                bmp.UnlockBits(srcD);
-                result.UnlockBits(dstD);
-                result.Save(dst, ImageFormat.Png);
-            }
-        }
-    }
-"@ -ReferencedAssemblies System.Drawing
-    $processedPath = [System.IO.Path]::Combine([System.IO.Path]::GetTempPath(), "ahk_ocr_processed.png")
-    [OcrPreprocess]::GrayAndAutoInvert($absPath, $processedPath)
+    # 直接使用原始图片进行 OCR，不进行强制灰度和反色预处理
+    # Tesseract 5 内部有更好的 Otsu 二值化和处理逻辑，复杂背景下我们的全局反色往往适得其反
+    $processedPath = $absPath
 
     # 设置 UTF-8 编码，避免中文乱码
     $prevEncoding = [Console]::OutputEncoding
