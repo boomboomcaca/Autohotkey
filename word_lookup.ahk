@@ -109,7 +109,7 @@ F2::
   try FileDelete(ocrResultFile)
 
   ; 使用 -OutputFile 参数让 PowerShell 直接以 UTF-8 写入结果文件
-  psCmd := 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "' . ocrScript . '" -ImagePath "' . tempImg . '" -MouseX ' . relMouseX . ' -MouseY ' . relMouseY . ' -OutputFile "' . ocrResultFile . '"'
+  psCmd := 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "' . ocrScript . '" -ImagePath "' . tempImg . '" -MouseX ' . relMouseX . ' -MouseY ' . relMouseY . ' -OutputFile "' . ocrResultFile . '" -DebugLog'
 
   Run(psCmd, , "Hide", &ocrPid)
   SetTimer(CheckOcrResult, 100)
