@@ -1,76 +1,18 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-; TTS 朗读相关函数
+; TTS 朗读相关函数 (Edge TTS 版)
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+global g_TtsProcPid := 0  ; 用于跟踪 edge-tts 进程
 
 Gui_PlayOriginal(*)
 {
   global g_OrigEditCtrl, g_IsChineseMode
-  static tempFile := ""
-  
-  ; 只在英文模式下朗读
-  if (g_IsChineseMode)
-    return
-  
   text := Trim(g_OrigEditCtrl.Value)
   if (text = "")
     return
   
-  ; 恢复前台窗口，避免全屏时任务栏弹出
-  RestorePrevForeground()
-  
-  ; 停止之前的播放
-  try {
-    SoundPlay("NonExistent.zzz")
-  }
-  Sleep(50)
-  
-  ; 删除旧文件
-  if (tempFile != "" && FileExist(tempFile)) {
-    try {
-      FileDelete(tempFile)
-    }
-  }
-  
-  ; 使用 Google TTS API
-  try {
-    ; 构建 Google TTS URL
-    encodedText := ""
-    Loop Parse, text
-    {
-      char := A_LoopField
-      if RegExMatch(char, "[a-zA-Z0-9\-_.~]")
-        encodedText .= char
-      else
-        encodedText .= "%" . Format("{:02X}", Ord(char))
-    }
-    
-    ttsUrl := "https://translate.google.com/translate_tts?ie=UTF-8&tl=en-US&client=tw-ob&q=" . encodedText
-    
-    ; 使用固定文件名
-    tempFile := A_Temp . "\ahk_tts_audio.mp3"
-    
-    http := ComObject("WinHttp.WinHttpRequest.5.1")
-    http.Open("GET", ttsUrl, false)
-    http.SetRequestHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-    http.SetRequestHeader("Referer", "https://translate.google.com/")
-    http.Send()
-    http.WaitForResponse()
-    
-    if (http.Status = 200) {
-      ; 保存音频文件
-      adoStream := ComObject("ADODB.Stream")
-      adoStream.Type := 1  ; Binary
-      adoStream.Open()
-      adoStream.Write(http.ResponseBody)
-      adoStream.SaveToFile(tempFile, 2)  ; 2 = overwrite
-      adoStream.Close()
-      
-      ; 播放音频
-      SoundPlay(tempFile)
-    }
-  } catch Error as e {
-    ; 静默失败
-  }
+  ; 英文模式下通常朗读原文，中文模式下也可以朗读（Edge TTS 支持良好）
+  PlayTtsText(text)
 }
 
 Gui_PlayCorrect(*)
@@ -94,70 +36,49 @@ Gui_PlayQuestion(*)
 RestorePrevForeground()
 {
   global g_PrevForegroundHwnd, g_MainGui
-  ; 恢复之前的前台窗口，防止全屏时任务栏弹出
   try {
     if (g_PrevForegroundHwnd && WinExist("ahk_id " . g_PrevForegroundHwnd))
       WinActivate("ahk_id " . g_PrevForegroundHwnd)
   }
 }
 
+; 核心朗读函数：支持中英自动识别
 PlayTtsText(text)
 {
-  static tempFile := ""
+  global g_TtsProcPid
+  static tempFile := A_Temp . "\ahk_tts_edge.mp3"
   
   text := Trim(text)
   if (text = "" || InStr(text, "正在") || InStr(text, "切换后"))
     return
   
-  ; 恢复前台窗口，避免全屏时任务栏弹出
-  RestorePrevForeground()
-  
-  ; 停止之前的播放
+  ; 1. 停止之前的播放和生成任务
   try {
+    if (g_TtsProcPid > 0)
+      ProcessClose(g_TtsProcPid)
     SoundPlay("NonExistent.zzz")
   }
+  g_TtsProcPid := 0
   Sleep(50)
   
-  ; 删除旧文件
-  if (tempFile != "" && FileExist(tempFile)) {
-    try {
-      FileDelete(tempFile)
-    }
-  }
+  ; 2. 自动检测语言并选择语音
+  isChinese := RegExMatch(text, "[\x{4e00}-\x{9fff}]")
+  voice := isChinese ? "zh-CN-XiaoxiaoNeural" : "en-US-AriaNeural"
   
-  ; 使用 Google TTS API
+  ; 3. 调用 edge-tts 生成音频
+  RestorePrevForeground()
+  escapedText := StrReplace(text, '"', '\"')
+  escapedText := StrReplace(escapedText, '`n', ' ')
+  escapedText := StrReplace(escapedText, '`r', '')
+
   try {
-    encodedText := ""
-    Loop Parse, text
-    {
-      char := A_LoopField
-      if RegExMatch(char, "[a-zA-Z0-9\-_.~]")
-        encodedText .= char
-      else
-        encodedText .= "%" . Format("{:02X}", Ord(char))
-    }
+    ; 同步生成音频
+    RunWait('edge-tts --voice ' . voice . ' --text "' . escapedText . '" --write-media "' . tempFile . '"', , "Hide")
     
-    ttsUrl := "https://translate.google.com/translate_tts?ie=UTF-8&tl=en-US&client=tw-ob&q=" . encodedText
-    tempFile := A_Temp . "\ahk_tts_audio.mp3"
-    
-    http := ComObject("WinHttp.WinHttpRequest.5.1")
-    http.Open("GET", ttsUrl, false)
-    http.SetRequestHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-    http.SetRequestHeader("Referer", "https://translate.google.com/")
-    http.Send()
-    http.WaitForResponse()
-    
-    if (http.Status = 200) {
-      adoStream := ComObject("ADODB.Stream")
-      adoStream.Type := 1
-      adoStream.Open()
-      adoStream.Write(http.ResponseBody)
-      adoStream.SaveToFile(tempFile, 2)
-      adoStream.Close()
-      
+    if FileExist(tempFile)
       SoundPlay(tempFile)
-    }
-  } catch {
+  } catch Error as e {
+    ; 静默失败或提示
   }
 }
 
@@ -168,62 +89,63 @@ CheckTtsHover()
   global g_PrevForegroundHwnd
   static lastHoverCtrl := ""
 
-  ; 如果窗口已关闭，停止定时器
   if (g_MainGui = "") {
     SetTimer(CheckTtsHover, 0)
     return
   }
 
-  ; 记录上一个非本窗口的前台窗口，用于朗读后恢复焦点
   try {
     fgHwnd := WinGetID("A")
     if (fgHwnd != g_MainGui.Hwnd)
       g_PrevForegroundHwnd := fgHwnd
   }
 
-  ; 检测鼠标在哪个朗读图标上
   currentHover := ""
   try {
     MouseGetPos(&mx, &my, &winUnder, &ctrlUnder, 2)
-    ; 中文模式只有翻译图标，英文模式有三个图标
-    if (!g_IsChineseMode && ctrlUnder = g_TtsOrigCtrl.Hwnd)
+    if (ctrlUnder = g_TtsOrigCtrl.Hwnd)
       currentHover := "orig"
-    else if (!g_IsChineseMode && ctrlUnder = g_TtsCorrectCtrl.Hwnd)
+    else if (ctrlUnder = g_TtsCorrectCtrl.Hwnd)
       currentHover := "correct"
     else if (ctrlUnder = g_TtsTranslateCtrl.Hwnd)
       currentHover := "translate"
     else if (g_TtsQuestionCtrl != "" && ctrlUnder = g_TtsQuestionCtrl.Hwnd)
       currentHover := "question"
-  } catch {
-  }
+  } 
 
   if (currentHover != "" && currentHover != lastHoverCtrl) {
-    ; 进入新图标，开始播放
     g_TtsPlaying := true
     g_HoverTarget := currentHover
     PlayTtsLoop()
   } else if (currentHover = "" && lastHoverCtrl != "") {
-    ; 离开图标，停止播放
-    g_TtsPlaying := false
-    g_HoverTarget := ""
-    try {
-      SoundPlay("NonExistent.zzz")
-    }
+    StopTts()
   }
 
   lastHoverCtrl := currentHover
 }
 
+StopTts()
+{
+  global g_TtsPlaying, g_HoverTarget, g_TtsProcPid
+  g_TtsPlaying := false
+  g_HoverTarget := ""
+  try {
+    if (g_TtsProcPid > 0)
+      ProcessClose(g_TtsProcPid)
+    SoundPlay("NonExistent.zzz")
+  }
+  g_TtsProcPid := 0
+}
+
 PlayTtsLoop()
 {
-  global g_TtsPlaying, g_IsChineseMode, g_HoverTarget
+  global g_TtsPlaying, g_HoverTarget, g_TtsProcPid
   global g_OrigEditCtrl, g_CorrectEditCtrl, g_TranslateEditCtrl, g_QuestionEditCtrl
-  static tempFile := ""
+  static tempFile := A_Temp . "\ahk_tts_hover.mp3"
 
   if (!g_TtsPlaying || g_HoverTarget = "")
     return
 
-  ; 根据悬停目标获取文本
   if (g_HoverTarget = "orig")
     text := Trim(g_OrigEditCtrl.Value)
   else if (g_HoverTarget = "correct")
@@ -238,43 +160,24 @@ PlayTtsLoop()
   if (text = "" || InStr(text, "正在") || InStr(text, "切换后"))
     return
 
-  ; 使用 Google TTS API
+  isChinese := RegExMatch(text, "[\x{4e00}-\x{9fff}]")
+  voice := isChinese ? "zh-CN-XiaoxiaoNeural" : "en-US-AriaNeural"
+  
   try {
-    encodedText := ""
-    Loop Parse, text
-    {
-      char := A_LoopField
-      if RegExMatch(char, "[a-zA-Z0-9\-_.~]")
-        encodedText .= char
-      else
-        encodedText .= "%" . Format("{:02X}", Ord(char))
-    }
-
-    ttsUrl := "https://translate.google.com/translate_tts?ie=UTF-8&tl=en-US&client=tw-ob&q=" . encodedText
-    tempFile := A_Temp . "\ahk_tts_audio.mp3"
-
-    http := ComObject("WinHttp.WinHttpRequest.5.1")
-    http.Open("GET", ttsUrl, false)
-    http.SetRequestHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-    http.SetRequestHeader("Referer", "https://translate.google.com/")
-    http.Send()
-    http.WaitForResponse()
-
-    if (http.Status = 200) {
-      adoStream := ComObject("ADODB.Stream")
-      adoStream.Type := 1
-      adoStream.Open()
-      adoStream.Write(http.ResponseBody)
-      adoStream.SaveToFile(tempFile, 2)
-      adoStream.Close()
-
-      ; 播放并等待完成
+    escapedText := StrReplace(text, '"', '\"')
+    escapedText := StrReplace(escapedText, '`n', ' ')
+    
+    ; 生成音频
+    RunWait('edge-tts --voice ' . voice . ' --text "' . escapedText . '" --write-media "' . tempFile . '"', , "Hide")
+    
+    if (g_TtsPlaying && FileExist(tempFile)) {
       SoundPlay(tempFile, "Wait")
-
-      ; 播放完毕后如果还在悬停，继续播放
+      
+      ; 播放完毕后如果还在悬停，循环播放
       if (g_TtsPlaying)
-        SetTimer(PlayTtsLoop, -100)
+        SetTimer(PlayTtsLoop, -300)
     }
   } catch {
   }
 }
+
