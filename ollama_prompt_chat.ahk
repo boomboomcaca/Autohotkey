@@ -294,23 +294,11 @@ DeletePrompt(listBox, nameEdit, promptEdit)
 
 CloseManageGui(manageGui)
 {
-  global g_MainGui, g_OrigEditCtrl
-  
-  ; 保存当前原文
-  currentText := ""
-  if (g_OrigEditCtrl != "")
-    try currentText := g_OrigEditCtrl.Value
-  
   manageGui.Destroy()
   ; 重新加载配置
   LoadPrompts()
-  
-  ; 销毁并重建主界面（最可靠的方法）
-  if (g_MainGui != "") {
-    try g_MainGui.Destroy()
-    g_MainGui := ""
-    ShowMainGui(currentText)
-  }
+  ; 刷新主界面的下拉列表
+  RefreshPromptDropdown()
 }
 
 RefreshPromptDropdown()
@@ -655,4 +643,67 @@ IsImeComposing()
   
   ; 如果组合字符串长度 > 0，说明正在输入中
   return (compLen > 0)
+}
+
+; ===== 共享流式文件处理函数 =====
+
+IsStreamComplete(filePath)
+{
+  if (!FileExist(filePath))
+    return false
+  try {
+    f := FileOpen(filePath, "r", "UTF-8")
+    if (!f)
+      return false
+    content := f.Read()
+    f.Close()
+    return InStr(content, '"done":true')
+  } catch {
+    return false
+  }
+}
+
+ReadStreamFile(filePath, &accumulatedContent)
+{
+  if (!FileExist(filePath))
+    return ""
+  
+  try {
+    f := FileOpen(filePath, "r", "UTF-8")
+    if (!f)
+      return accumulatedContent
+    content := f.Read()
+    f.Close()
+  } catch {
+    return accumulatedContent
+  }
+  
+  result := ""
+  Loop Parse, content, "`n", "`r"
+  {
+    line := Trim(A_LoopField)
+    if (line = "")
+      continue
+    if RegExMatch(line, '"response":"((?:[^"\\]|\\.)*)"', &m) {
+      token := m[1]
+      token := StrReplace(token, "\n", "`n")
+      token := StrReplace(token, "\r", "`r")
+      token := StrReplace(token, "\t", "`t")
+      token := StrReplace(token, '\"', '"')
+      token := StrReplace(token, "\\", "\")
+      result .= token
+    }
+  }
+  
+  result := RegExReplace(result, "s)<think>.*?</think>", "")
+  result := StrReplace(result, "<think>", "")
+  result := StrReplace(result, "</think>", "")
+  result := StrReplace(result, "/think", "")
+  result := StrReplace(result, "/no_think", "")
+  result := Trim(result)
+  
+  if (result != "")
+    accumulatedContent := result
+  
+  return accumulatedContent
 }

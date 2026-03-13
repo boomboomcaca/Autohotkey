@@ -4,6 +4,8 @@
 
 #Include "UIA.ahk"
 #Include "OCR.ahk"
+#Include "ollama_tts.ahk"
+#Include "ollama_prompt_chat.ahk"
 
 ; ===== 全局变量 =====
 g_WL_Gui := ""
@@ -29,6 +31,38 @@ g_WL_TtsPid := 0
 g_WL_TtsWord := ""
 g_WL_History := []
 g_WL_HistoryIdx := 0
+
+; AI 问答相关 (与 ollama_translate.ahk 保持一致，以便复用逻辑)
+g_QuestionEditCtrl := ""
+g_AnswerEditCtrl := ""
+g_SendBtnCtrl := ""
+g_ChatPending := false
+g_StreamFileChat := ""
+g_StreamPidChat := 0
+g_StreamContentChat := ""
+
+; Prompt 模板相关
+g_ConfigFile := A_ScriptDir . "\ollama_config.ini"
+g_PromptList := []
+g_PromptNames := []
+g_SelectedPrompt := ""
+g_PromptDropdown := ""
+g_PromptManageBtn := ""
+
+; 其他依赖变量 (供 ollama_tts.ahk 和 ollama_prompt_chat.ahk 使用)
+g_MainGui := ""
+g_OrigEditCtrl := ""
+g_IsChineseMode := false
+g_TtsOrigCtrl := ""
+g_TtsCorrectCtrl := ""
+g_TtsTranslateCtrl := ""
+g_TtsQuestionCtrl := ""
+g_TtsPlaying := false
+g_HoverTarget := ""
+g_PrevForegroundHwnd := 0
+
+; 初始化 Prompt 模板
+InitPrompts()
 
 ; ===== 快捷键 F2 =====
 F2::
@@ -215,13 +249,16 @@ F2::
 ShowWordPopup(word, context, posX, posY)
 {
   global g_WL_Gui, g_WL_ResultCtrl, g_WL_TitleCtrl, g_WL_WordEdit, g_WL_ContextEdit, WL_CurrentWord, WL_CurrentContext, g_WL_LangMode, g_WL_LangBtn
+  global g_IsChineseMode, g_QuestionEditCtrl, g_AnswerEditCtrl, g_SendBtnCtrl, g_PromptDropdown
   WL_CurrentWord := word
   WL_CurrentContext := context
+  g_IsChineseMode := RegExMatch(word, "[\x{4e00}-\x{9fff}]")
 
   if (g_WL_Gui != "") {
     ; 如果窗口已存在，直接更新内容，不重新创建
     g_WL_WordEdit.Value := word
     g_WL_ContextEdit.Value := (context != "" && context != word) ? context : ""
+    g_QuestionEditCtrl.Value := word
     g_WL_ResultCtrl.Value := "⏳ 正在查询..."
 
     ; 重置悬停自动关闭的检测状态，防止刚更新完就消失
@@ -240,8 +277,8 @@ ShowWordPopup(word, context, posX, posY)
     return
   }
 
-
   g_WL_Gui := Gui("+AlwaysOnTop -Caption +Border +Owner")
+  g_MainGui := g_WL_Gui  ; 兼容 ollama_prompt_chat.ahk
   g_WL_Gui.BackColor := "FFFFFF"
   g_WL_Gui.MarginX := 12
   g_WL_Gui.MarginY := 8
@@ -263,6 +300,7 @@ ShowWordPopup(word, context, posX, posY)
   ; 语境行（可编辑）
   g_WL_Gui.SetFont("s10 c444444 Norm", "Microsoft YaHei")
   g_WL_ContextEdit := g_WL_Gui.AddEdit("xs w320 -E0x200", (context != "" && context != word) ? context : "")
+  g_OrigEditCtrl := g_WL_ContextEdit ; 兼容 ollama_prompt_chat.ahk
 
   ; 分隔线
   g_WL_Gui.SetFont("s1 cCCCCCC", "Microsoft YaHei")
@@ -270,11 +308,41 @@ ShowWordPopup(word, context, posX, posY)
 
   ; 结果区域（可选中复制）
   g_WL_Gui.SetFont("s10 c333333 Norm", "Microsoft YaHei")
-  g_WL_ResultCtrl := g_WL_Gui.AddEdit("xs w320 h180 ReadOnly -E0x200", "⏳ 正在查询...")
+  g_WL_ResultCtrl := g_WL_Gui.AddEdit("xs w320 h265 ReadOnly -E0x200", "⏳ 正在查询...")
+
+  ; ==========================================================
+  ; AI 问答区域 (右侧面板)
+  ; ==========================================================
+  g_WL_Gui.SetFont("s9 c666666", "Microsoft YaHei")
+  g_WL_Gui.AddText("x350 y12 w50 Section", "Prompt:")
+  
+  promptList := ""
+  for name in g_PromptNames {
+    promptList .= (promptList = "" ? "" : "|") . name
+  }
+  g_PromptDropdown := g_WL_Gui.AddDropDownList("x+2 yp-3 w200", StrSplit(promptList, "|"))
+  if (g_SelectedPrompt != "")
+    g_PromptDropdown.Text := g_SelectedPrompt
+  g_PromptDropdown.OnEvent("Change", Gui_PromptChanged)
+  
+  g_PromptManageBtn := g_WL_Gui.AddButton("x+5 yp w58 h24", "管理")
+  g_PromptManageBtn.OnEvent("Click", Gui_ManagePrompts)
+
+  g_WL_Gui.SetFont("s9 c333333", "Microsoft YaHei")
+  g_WL_Gui.AddText("xs Section", "问题:")
+  g_TtsQuestionCtrl := g_WL_Gui.AddText("x+5 ys cGray", "🔊")
+  g_TtsQuestionCtrl.OnEvent("Click", Gui_PlayQuestion)
+  
+  g_QuestionEditCtrl := g_WL_Gui.AddEdit("xs w255 h50 -E0x200", word)
+  g_SendBtnCtrl := g_WL_Gui.AddButton("x+5 yp w60 h50", "发送")
+  g_SendBtnCtrl.OnEvent("Click", Gui_SendQuestion)
+
+  g_WL_Gui.AddText("xs", "回答:")
+  g_AnswerEditCtrl := g_WL_Gui.AddEdit("xs w320 h197 ReadOnly -E0x200", "")
 
   ; 底部提示
   g_WL_Gui.SetFont("s8 cAAAAAA", "Microsoft YaHei")
-  g_WL_Gui.AddText("w320", "Enter 重新查询 | Esc 关闭 | 鼠标移出关闭")
+  g_WL_Gui.AddText("xm w650", "Enter 重新查询 | 鼠标移出关闭 | Esc 关闭 | Tab 切换焦点")
 
   ; 先在屏幕外显示一次，获取窗口的真实尺寸
   g_WL_Gui.Show("x-9999 y-9999 NoActivate")
@@ -323,6 +391,7 @@ ShowWordPopup(word, context, posX, posY)
   g_WL_MouseMoved := false
   g_WL_ShowTick := A_TickCount
   SetTimer(WL_CheckClickOutside, 200)
+  SetTimer(CheckTtsHover, 200)
 
   ; 预生成 TTS 音频（后台，不阻塞）
   WL_PregenTts(word)
@@ -335,9 +404,16 @@ ShowWordPopup(word, context, posX, posY)
 WL_HandleEnter(*)
 {
   global g_WL_WordEdit, g_WL_ContextEdit, g_WL_ResultCtrl, WL_CurrentWord, WL_CurrentContext
+  global g_QuestionEditCtrl, g_AnswerEditCtrl
 
   if (g_WL_WordEdit = "")
     return
+
+  focusedHwnd := ControlGetFocus("A")
+  if (g_QuestionEditCtrl != "" && focusedHwnd = g_QuestionEditCtrl.Hwnd) {
+    Gui_SendQuestion()
+    return
+  }
 
   newWord := Trim(g_WL_WordEdit.Value)
   if (newWord = "")
@@ -348,6 +424,9 @@ WL_HandleEnter(*)
   WL_CurrentContext := newContext
   if (g_WL_ResultCtrl != "")
     g_WL_ResultCtrl.Value := "⏳ 正在查询..."
+  if (g_AnswerEditCtrl != "")
+    g_AnswerEditCtrl.Value := ""
+  
   WL_PregenTts(newWord)
   StartWordOllamaRequest(newWord, newContext)
 }
@@ -622,16 +701,27 @@ CloseWordGui()
   global g_WL_Gui, g_WL_ResultCtrl, g_WL_TitleCtrl
   global g_WL_StreamPid, g_WL_Pending, g_WL_StreamFile
   global g_WL_WordEdit, g_WL_ContextEdit
+  global g_StreamPidChat, g_ChatPending, g_QuestionEditCtrl, g_AnswerEditCtrl, g_SendBtnCtrl
+  global g_TtsPlaying, g_HoverTarget, g_MainGui
 
   ; 终止请求
   if (g_WL_StreamPid > 0) {
     try ProcessClose(g_WL_StreamPid)
     g_WL_StreamPid := 0
   }
+  if (g_StreamPidChat > 0) {
+    try ProcessClose(g_StreamPidChat)
+    g_StreamPidChat := 0
+  }
   g_WL_Pending := false
+  g_ChatPending := false
   SetTimer(CheckWordResult, 0)
+  SetTimer(CheckChatResult, 0)
   SetTimer(WL_CheckClickOutside, 0)
+  SetTimer(CheckTtsHover, 0)
   try SoundPlay("NonExistent.zzz")
+  g_TtsPlaying := false
+  g_HoverTarget := ""
 
   ; 彻底清理临时文件
   try FileDelete(g_WL_StreamFile)
@@ -653,8 +743,18 @@ CloseWordGui()
     g_WL_TitleCtrl := ""
     g_WL_WordEdit := ""
     g_WL_ContextEdit := ""
+    g_QuestionEditCtrl := ""
+    g_AnswerEditCtrl := ""
+    g_SendBtnCtrl := ""
+    g_PromptDropdown := ""
+    g_MainGui := ""
   }
 }
+
+; ===== 兼容性辅助函数 (供 ollama_prompt_chat.ahk 使用) =====
+
+; IsStreamComplete 已移至共享库
+
 
 ; ===== 预生成 TTS 音频（后台） =====
 WL_PregenTts(word)
