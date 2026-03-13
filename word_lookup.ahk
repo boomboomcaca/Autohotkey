@@ -463,7 +463,7 @@ WL_CheckClickOutside()
   ; 鼠标未移动前不检测，避免窗口刚显示就关闭
   global g_WL_InitMouseX, g_WL_InitMouseY, g_WL_MouseMoved
   CoordMode("Mouse", "Screen")
-  MouseGetPos(&cx, &cy)
+  MouseGetPos(&cx, &cy, &winAtMouse)
   if (!g_WL_MouseMoved) {
     if (Abs(cx - g_WL_InitMouseX) > 5 || Abs(cy - g_WL_InitMouseY) > 5)
       g_WL_MouseMoved := true
@@ -471,24 +471,35 @@ WL_CheckClickOutside()
       return
   }
 
-  ; 检测鼠标是否在窗口外，是则自动关闭
-  MouseGetPos(&mx, &my, &winAtMouse)
+  ; 如果鼠标还在查词主窗口内，直接返回
+  if (winAtMouse == g_WL_Gui.Hwnd)
+    return
+
+  ; 检查鼠标所在窗口的特征（白名单机制）
   try {
-    if (winAtMouse != g_WL_Gui.Hwnd) {
-      ; 检查是否为输入法相关窗口，避免中文输入时误关闭
-      try {
-        imeClass := WinGetClass("ahk_id " . winAtMouse)
-        imePid := WinGetPID("ahk_id " . winAtMouse)
-        imeProcName := ProcessGetName(imePid)
-        if (imeClass = "ApplicationFrameWindow"
-          || imeProcName = "TextInputHost.exe"
-          || InStr(imeClass, "IME") || InStr(imeClass, "MSCTFIME") || InStr(imeClass, "Cand")
-          || InStr(imeProcName, "IME"))
-          return
-      }
-      CloseWordGui()
+    if (winAtMouse = 0)
+      return ; 瞬时获取失败，暂时忽略
+
+    curClass := WinGetClass("ahk_id " . winAtMouse)
+    curPid := WinGetPID("ahk_id " . winAtMouse)
+    curProc := ProcessGetName(curPid)
+    ourPid := ProcessExist()
+
+    ; 判定是否豁免（不关闭）：
+    ; 1. 窗口属于当前脚本进程 (包含 DropDownList 的 ComboLBox 弹出层、管理子窗口等)
+    ; 2. 属于 Windows 系统通用组件 (菜单、阴影等)
+    ; 3. 属于正在工作中的输入法 (IME/TextInputHost)
+    if (curPid == ourPid 
+        || curClass == "ComboLBox" || curClass == "#32768" || curClass == "SysShadow" || InStr(curClass, "Combo")
+        || InStr(curClass, "IME") || InStr(curClass, "Cand") || InStr(curProc, "IME") || curProc == "TextInputHost.exe" || curClass == "ApplicationFrameWindow") {
       return
     }
+    
+    ; 确认处于外部窗口且非豁免窗口，执行关闭
+    CloseWordGui()
+  } catch {
+    ; 报错（往往是因为 winAtMouse 句柄正好无效了）则暂时忽略，不执行关闭
+    return
   }
 }
 
