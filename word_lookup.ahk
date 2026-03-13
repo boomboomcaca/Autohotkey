@@ -263,12 +263,17 @@ ShowWordPopup(word, context, posX, posY)
 
     ; 重置悬停自动关闭的检测状态，防止刚更新完就消失
     global g_WL_InitMouseX, g_WL_InitMouseY, g_WL_MouseMoved, g_WL_ShowTick
+    CoordMode("Mouse", "Screen")
     MouseGetPos(&g_WL_InitMouseX, &g_WL_InitMouseY)
     g_WL_MouseMoved := false
     g_WL_ShowTick := A_TickCount
 
-    ; 激活窗口，把焦点放在窗口上，保证快捷键可用
-    try WinActivate("ahk_id " . g_WL_Gui.Hwnd)
+    ; 激活窗口并聚焦问题框
+    try {
+      WinActivate("ahk_id " . g_WL_Gui.Hwnd)
+      g_QuestionEditCtrl.Focus()
+      SendMessage(0x00B1, -1, -1, g_QuestionEditCtrl.Hwnd)
+    }
 
     ; 预生成 TTS 音频（后台，会自动终止上一个）
     WL_PregenTts(word)
@@ -374,8 +379,10 @@ ShowWordPopup(word, context, posX, posY)
   if (showY < monTop)
     showY := monTop
 
-  ; 移动到正确位置
-  g_WL_Gui.Show("x" . showX . " y" . showY . " NoActivate")
+  ; 移动到正确位置并聚焦
+  g_WL_Gui.Show("x" . showX . " y" . showY)
+  g_QuestionEditCtrl.Focus()
+  SendMessage(0x00B1, -1, -1, g_QuestionEditCtrl.Hwnd)
 
   ; 绑定 Esc/Enter、历史记录导航
   HotIfWinActive("ahk_id " g_WL_Gui.Hwnd)
@@ -387,6 +394,7 @@ ShowWordPopup(word, context, posX, posY)
 
   ; 启动鼠标移出关闭的检测定时器
   global g_WL_InitMouseX, g_WL_InitMouseY, g_WL_MouseMoved, g_WL_ShowTick
+  CoordMode("Mouse", "Screen")
   MouseGetPos(&g_WL_InitMouseX, &g_WL_InitMouseY)
   g_WL_MouseMoved := false
   g_WL_ShowTick := A_TickCount
@@ -454,6 +462,7 @@ WL_CheckClickOutside()
 
   ; 鼠标未移动前不检测，避免窗口刚显示就关闭
   global g_WL_InitMouseX, g_WL_InitMouseY, g_WL_MouseMoved
+  CoordMode("Mouse", "Screen")
   MouseGetPos(&cx, &cy)
   if (!g_WL_MouseMoved) {
     if (Abs(cx - g_WL_InitMouseX) > 5 || Abs(cy - g_WL_InitMouseY) > 5)
@@ -828,6 +837,7 @@ RButton::
   WL_PlayTtsOnce()
   
   ; 2. 重置自动关闭防抖动计时器（防止因触发而导致抖动退出）
+  CoordMode("Mouse", "Screen")
   MouseGetPos(&g_WL_InitMouseX, &g_WL_InitMouseY)
   g_WL_MouseMoved := false
   g_WL_ShowTick := A_TickCount
@@ -867,6 +877,13 @@ WL_NavHistory(dir)
     g_WL_WordEdit.Value := item.word
   if (g_WL_ContextEdit != "")
     g_WL_ContextEdit.Value := item.context
+  
+  global g_QuestionEditCtrl
+  if (g_QuestionEditCtrl != "") {
+    g_QuestionEditCtrl.Value := item.word
+    g_QuestionEditCtrl.Focus()
+    SendMessage(0x00B1, -1, -1, g_QuestionEditCtrl.Hwnd)
+  }
 
   if (item.result != "") {
     if (g_WL_ResultCtrl != "")
@@ -891,6 +908,7 @@ WL_NavHistory(dir)
 
   ; 导航操作视同活跃操作，重置自动关闭的计时器
   global g_WL_InitMouseX, g_WL_InitMouseY, g_WL_MouseMoved, g_WL_ShowTick
+  CoordMode("Mouse", "Screen")
   MouseGetPos(&g_WL_InitMouseX, &g_WL_InitMouseY)
   g_WL_MouseMoved := false
   g_WL_ShowTick := A_TickCount
