@@ -384,12 +384,32 @@ ShowWordPopup(word, context, posX, posY)
   g_QuestionEditCtrl.Focus()
   SendMessage(0x00B1, -1, -1, g_QuestionEditCtrl.Hwnd)
 
-  ; 绑定 Esc/Enter、历史记录导航
+  ; 绑定 Esc/Enter、历史记录导航、以及 Emacs 文本操作 (参照主窗口处理)
   HotIfWinActive("ahk_id " g_WL_Gui.Hwnd)
   Hotkey("Escape", WL_HandleEsc, "On")
   Hotkey("Enter", WL_HandleEnter, "On")
   Hotkey("!Left", (*) => WL_NavHistory(-1), "On")
   Hotkey("!Right", (*) => WL_NavHistory(1), "On")
+  ; 文本操作增强
+  Hotkey("Tab", Gui_ToggleFocus, "On")
+  Hotkey("^Tab", Gui_ToggleSelect, "On")
+  Hotkey("^v", Gui_PasteAsText, "On")
+  Hotkey("^Backspace", Gui_DeleteWord, "On")
+  ; 显式绑定 Emacs 核心快捷键，确保在无标题窗口中也生效
+  Hotkey("^a", (*) => (is_target() ? Send("^a") : move_beginning_of_line()), "On")
+  Hotkey("^e", (*) => (is_target() ? Send("^e") : move_end_of_line()), "On")
+  Hotkey("^p", (*) => (is_target() ? Send("^p") : previous_line()), "On")
+  Hotkey("^n", (*) => (is_target() ? Send("^n") : next_line()), "On")
+  Hotkey("^f", (*) => (is_target() ? Send("^f") : forward_char()), "On")
+  Hotkey("^b", (*) => (is_target() ? Send("^b") : backward_char()), "On")
+  Hotkey("^d", (*) => (is_target() ? Send("^d") : delete_char()), "On")
+  Hotkey("^h", (*) => (is_target() ? Send("^h") : delete_backward_char()), "On")
+  Hotkey("^k", (*) => (is_target() ? Send("^k") : kill_line()), "On")
+  Hotkey("^w", (*) => (is_target() ? Send("^w") : kill_region()), "On")
+  Hotkey("!w", (*) => (is_target() ? Send("!w") : kill_ring_save()), "On")
+  Hotkey("^y", (*) => (is_target() ? Send("^y") : yank()), "On")
+  Hotkey("^g", (*) => (is_target() ? Send("^g") : quit()), "On")
+  Hotkey("^/", (*) => (is_target() ? Send("^/") : undo()), "On")
   HotIfWinActive()
 
   ; 启动鼠标移出关闭的检测定时器
