@@ -444,71 +444,7 @@ ParseCombinedResult(result)
   }
 }
 
-IsStreamComplete(filePath)
-{
-  if (!FileExist(filePath))
-    return false
-  try {
-    f := FileOpen(filePath, "r", "UTF-8")
-    if (!f)
-      return false
-    content := f.Read()
-    f.Close()
-    return InStr(content, '"done":true')
-  } catch {
-    return false
-  }
-}
-
-ReadStreamFile(filePath, &accumulatedContent)
-{
-  if (!FileExist(filePath))
-    return ""
-  
-  try {
-    ; 使用共享读取模式打开文件
-    f := FileOpen(filePath, "r", "UTF-8")
-    if (!f)
-      return accumulatedContent
-    content := f.Read()
-    f.Close()
-  } catch {
-    return accumulatedContent
-  }
-  
-  ; 解析流式 JSON 行 - 使用正则表达式
-  result := ""
-  Loop Parse, content, "`n", "`r"
-  {
-    line := Trim(A_LoopField)
-    if (line = "")
-      continue
-    ; 使用正则提取 response 字段（支持转义字符）
-    if RegExMatch(line, '"response":"((?:[^"\\]|\\.)*)"', &m) {
-      token := m[1]
-      ; 反转义 JSON 字符串
-      token := StrReplace(token, "\n", "`n")
-      token := StrReplace(token, "\r", "`r")
-      token := StrReplace(token, "\t", "`t")
-      token := StrReplace(token, '\"', '"')
-      token := StrReplace(token, "\\", "\")
-      result .= token
-    }
-  }
-  
-  ; 清理 think 标签
-  result := RegExReplace(result, "s)<think>.*?</think>", "")
-  result := StrReplace(result, "<think>", "")
-  result := StrReplace(result, "</think>", "")
-  result := StrReplace(result, "/think", "")
-  result := StrReplace(result, "/no_think", "")
-  result := Trim(result)
-  
-  if (result != "")
-    accumulatedContent := result
-  
-  return accumulatedContent
-}
+; IsStreamComplete 和 ReadStreamFile 已移至 ollama_prompt_chat.ahk
 
 UpdateTranslateResult(result)
 {
