@@ -683,7 +683,7 @@ WL_PregenTts(word)
 
   escapedText := StrReplace(text, '"', '\"')
   try {
-    Run('edge-tts --voice en-US-AriaNeural --volume=+500% --text "' . escapedText . '" --write-media "' . g_WL_TtsFile . '"', , "Hide", &outPid)
+    Run('edge-tts --voice en-US-AriaNeural --volume=+100% --text "' . escapedText . '" --write-media "' . g_WL_TtsFile . '"', , "Hide", &outPid)
     g_WL_TtsPid := outPid
   }
 }
