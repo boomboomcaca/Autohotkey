@@ -310,6 +310,13 @@ StartAsyncHttp(prompt, requestType)
   ; 系统提示：强制禁用 Markdown 和符号
   sysPrompt := "纯文本输出，不要用任何符号（如反斜杠、星号、井号）包裹或强调单词。"
   
+  ; 转义 prompt 用于 JSON
+  prompt := StrReplace(prompt, "\", "\\")
+  prompt := StrReplace(prompt, "`"", "\`"")
+  prompt := StrReplace(prompt, "`n", "\n")
+  prompt := StrReplace(prompt, "`r", "\r")
+  prompt := StrReplace(prompt, "`t", "\t")
+  
   ; 构建 JSON (使用流式)
   json := '{"model":"huihui_ai/qwen3-abliterated:8b-v2","system":"' . sysPrompt . '","prompt":"' . prompt . '","stream":true,"options":{"temperature":0,"num_predict":1024,"think":true}}'
   
@@ -339,19 +346,26 @@ CheckAsyncResults()
   if (g_CorrectPending && IsObject(g_HttpCorrect)) {
     ; 检查是否已经开始返回或已完成 (3=Receiving, 4=Complete)
     if (g_HttpCorrect.readyState >= 3) {
-      result := ParseStreamData(g_HttpCorrect.responseText, &g_StreamContentCorrect)
-      
-      ; 实时更新 GUI（可选，如果需要实时效果）
-      if (result != "") {
-        ; 简单的预解析，或者等完成后再一次性解析
-        ; 这里我们先尝试局部解析来获得更好的反馈感
-        UpdateCorrectResult("正在生成输出...") 
+      try {
+        result := ParseStreamData(g_HttpCorrect.responseText, &g_StreamContentCorrect)
+        
+        ; 实时更新 GUI（可选，如果需要实时效果）
+        if (result != "") {
+          ; 简单的预解析，或者等完成后再一次性解析
+          ; 这里我们先尝试局部解析来获得更好的反馈感
+          UpdateCorrectResult("正在生成输出...") 
+        }
+      } catch {
+        ; 0x8000000A 报错说明数据暂时不可用，跳过本次轮询等待下一次
       }
       
       ; 检查是否完全结束
       if (g_HttpCorrect.readyState == 4) {
-        if (result != "") {
-           ParseCombinedResult(result)
+        try {
+          finalRes := ParseStreamData(g_HttpCorrect.responseText, &g_StreamContentCorrect)
+          if (finalRes != "") {
+            ParseCombinedResult(finalRes)
+          }
         }
         g_CorrectPending := false
         g_TranslatePending := false
