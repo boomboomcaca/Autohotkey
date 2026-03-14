@@ -328,7 +328,7 @@ StartAsyncHttp(prompt, requestType)
 
 CheckAsyncResults()
 {
-  global g_CorrectPending, g_TranslatePending
+  global g_CorrectPending, g_TranslatePending, g_HttpCorrect
   global g_IsChineseMode, g_CorrectRequested, g_TranslateRequested, g_CurrentText
   global g_CorrectEditCtrl, g_TranslateEditCtrl
   global g_StreamFileCorrect, g_StreamFileTranslate
