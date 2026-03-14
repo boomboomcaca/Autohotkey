@@ -351,7 +351,7 @@ Gui_SendQuestion(*)
 StartChatAsync(question)
 {
   global g_StreamFileChat, g_StreamPidChat, g_StreamContentChat, g_ChatPending
-  global g_SelectedPrompt
+  global g_SelectedPrompt, g_HttpChat
   
   ; 终止之前正在运行的 Chat 请求
   if (g_StreamPidChat > 0) {
@@ -663,8 +663,16 @@ ParseStreamData(rawContent, &accumulatedContent)
     if (line = "" || !InStr(line, "{"))
       continue
     
-    ; 简单的 JSON 提取，避免引用大型库
-    if RegExMatch(line, '"response":"((?:[^"\\]|\\.)*)"', &m) {
+    ; 增加对错误的检测
+    if RegExMatch(line, '"error"\s*:\s*"((?:[^"\\]|\\.)*)"', &m) {
+      errorMsg := m[1]
+      errorMsg := StrReplace(errorMsg, "\n", "`n")
+      errorMsg := StrReplace(errorMsg, '\"', '"')
+      return "错误: " . errorMsg
+    }
+    
+    ; 简单的 JSON 提取，支持冒号前后的空格
+    if RegExMatch(line, '"response"\s*:\s*"((?:[^"\\]|\\.)*)"', &m) {
       token := m[1]
       ; 基础转义还原
       token := StrReplace(token, "\n", "`n")
