@@ -18,6 +18,7 @@ g_OrigEditCtrl := ""
 ; 异步 HTTP 对象
 g_HttpCorrect := ""
 g_HttpTranslate := ""
+g_HttpChat := ""
 g_CorrectPending := false
 g_TranslatePending := false
 g_CorrectRequested := false
@@ -29,22 +30,16 @@ g_PendingShowGui := false
 g_PrevForegroundHwnd := 0
 g_GuiHidden := false
 
-; 流式响应相关
-g_StreamFileCorrect := ""
-g_StreamFileTranslate := ""
-g_StreamPidCorrect := 0
-g_StreamPidTranslate := 0
+; 流式响应缓存
 g_StreamContentCorrect := ""
 g_StreamContentTranslate := ""
+g_StreamContentChat := ""
 
 ; AI 问答相关
 g_QuestionEditCtrl := ""
 g_AnswerEditCtrl := ""
 g_SendBtnCtrl := ""
 g_ChatPending := false
-g_StreamFileChat := ""
-g_StreamPidChat := 0
-g_StreamContentChat := ""
 
 ; Prompt 模板相关
 g_ConfigFile := A_ScriptDir . "\ollama_config.ini"
@@ -279,13 +274,9 @@ StartAsyncRequests(text, requestType := "default")
   global g_StreamPidCorrect, g_StreamPidTranslate
   
   ; 终止之前正在运行的请求
-  if (g_StreamPidCorrect > 0) {
-    try ProcessClose(g_StreamPidCorrect)
-    g_StreamPidCorrect := 0
-  }
-  if (g_StreamPidTranslate > 0) {
-    try ProcessClose(g_StreamPidTranslate)
-    g_StreamPidTranslate := 0
+  if (IsObject(g_HttpCorrect)) {
+    try g_HttpCorrect.Abort()
+    g_HttpCorrect := ""
   }
   
   g_CurrentText := text
@@ -316,56 +307,21 @@ StartAsyncRequests(text, requestType := "default")
 
 StartAsyncHttp(prompt, requestType)
 {
-  global g_StreamFileCorrect, g_StreamFileTranslate, g_StreamPidCorrect, g_StreamPidTranslate
-  global g_StreamContentCorrect, g_StreamContentTranslate
-  
-  ; 转义 prompt 用于 JSON
-  prompt := StrReplace(prompt, "\", "\\")
-  prompt := StrReplace(prompt, "`"", "\`"")
-  prompt := StrReplace(prompt, "`n", "\n")
-  prompt := StrReplace(prompt, "`r", "\r")
-  prompt := StrReplace(prompt, "`t", "\t")
-  
-  ; 设置临时文件
-  if (requestType = "correct") {
-    g_StreamFileCorrect := A_Temp . "\ollama_stream_correct.txt"
-    g_StreamContentCorrect := ""
-    streamFile := g_StreamFileCorrect
-    jsonFile := A_Temp . "\ollama_request_correct.json"
-  } else {
-    g_StreamFileTranslate := A_Temp . "\ollama_stream_translate.txt"
-    g_StreamContentTranslate := ""
-    streamFile := g_StreamFileTranslate
-    jsonFile := A_Temp . "\ollama_request_translate.json"
-  }
-  
-  ; 删除旧文件
-  try FileDelete(streamFile)
-  try FileDelete(jsonFile)
-  
   ; 系统提示：强制禁用 Markdown 和符号
   sysPrompt := "纯文本输出，不要用任何符号（如反斜杠、星号、井号）包裹或强调单词。"
   
-  ; 构建 JSON (使用流式，添加 system 参数)
+  ; 构建 JSON (使用流式)
   json := '{"model":"huihui_ai/qwen3-abliterated:8b-v2","system":"' . sysPrompt . '","prompt":"' . prompt . '","stream":true,"options":{"temperature":0,"num_predict":1024,"think":true}}'
   
-  ; 将 JSON 写入临时文件
   try {
-    FileAppend(json, jsonFile, "UTF-8-RAW")
-  } catch {
-    return 0
-  }
-  
-  ; 使用公用脚本发起流式请求
-  psFile := A_ScriptDir . "\ollama_stream.ps1"
-  try {
-    Run('powershell.exe -NoProfile -ExecutionPolicy Bypass -File "' . psFile . '" -JsonFile "' . jsonFile . '" -OutputFile "' . streamFile . '"', , "Hide", &outPid)
-    if (requestType = "correct")
-      g_StreamPidCorrect := outPid
-    else
-      g_StreamPidTranslate := outPid
-    return outPid
-  } catch {
+    ; 使用 Msxml2.XMLHTTP 支持在接收过程中读取数据 (readyState=3)
+    http := ComObject("Msxml2.XMLHTTP")
+    http.Open("POST", "http://localhost:11434/api/generate", true)
+    http.SetRequestHeader("Content-Type", "application/json; charset=utf-8")
+    http.Send(json)
+    return http
+  } catch Error as e {
+    TrayTip("请求启动失败", e.Message, "Icon!")
     return 0
   }
 }
@@ -380,16 +336,27 @@ CheckAsyncResults()
   global g_StreamPidCorrect, g_StreamPidTranslate
   
   ; 检查组合结果（一次调用同时返回纠错和翻译）
-  if (g_CorrectPending && g_StreamFileCorrect != "") {
-    if (IsStreamComplete(g_StreamFileCorrect)) {
-      Sleep(200)
-      result := ReadStreamFile(g_StreamFileCorrect, &g_StreamContentCorrect)
+  if (g_CorrectPending && IsObject(g_HttpCorrect)) {
+    ; 检查是否已经开始返回或已完成 (3=Receiving, 4=Complete)
+    if (g_HttpCorrect.readyState >= 3) {
+      result := ParseStreamData(g_HttpCorrect.responseText, &g_StreamContentCorrect)
+      
+      ; 实时更新 GUI（可选，如果需要实时效果）
       if (result != "") {
-        ; 解析组合结果
-        ParseCombinedResult(result)
+        ; 简单的预解析，或者等完成后再一次性解析
+        ; 这里我们先尝试局部解析来获得更好的反馈感
+        UpdateCorrectResult("正在生成输出...") 
       }
-      g_CorrectPending := false
-      g_TranslatePending := false
+      
+      ; 检查是否完全结束
+      if (g_HttpCorrect.readyState == 4) {
+        if (result != "") {
+           ParseCombinedResult(result)
+        }
+        g_CorrectPending := false
+        g_TranslatePending := false
+        g_HttpCorrect := ""
+      }
     }
   }
   
