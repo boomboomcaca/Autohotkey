@@ -250,6 +250,7 @@ ShowWordPopup(word, context, posX, posY)
 {
   global g_WL_Gui, g_WL_ResultCtrl, g_WL_TitleCtrl, g_WL_WordEdit, g_WL_ContextEdit, WL_CurrentWord, WL_CurrentContext, g_WL_LangMode, g_WL_LangBtn
   global g_IsChineseMode, g_QuestionEditCtrl, g_AnswerEditCtrl, g_SendBtnCtrl, g_PromptDropdown
+  global g_MainGui, g_OrigEditCtrl, g_PromptNames, g_SelectedPrompt, g_PromptManageBtn, g_TtsQuestionCtrl
   WL_CurrentWord := word
   WL_CurrentContext := context
   g_IsChineseMode := RegExMatch(word, "[\x{4e00}-\x{9fff}]")
