@@ -408,12 +408,17 @@ StartChatAsync(question)
     return
   }
   
-  ; 使用公用脚本发起流式请求
-  psFile := A_ScriptDir . "\ollama_stream.ps1"
   try {
-    Run('powershell.exe -NoProfile -ExecutionPolicy Bypass -File "' . psFile . '" -JsonFile "' . jsonFile . '" -OutputFile "' . g_StreamFileChat . '"', , "Hide", &outPid)
-    g_StreamPidChat := outPid
-  } catch {
+    ; 使用 Msxml2.XMLHTTP 启动异步流式请求
+    http := ComObject("Msxml2.XMLHTTP")
+    http.Open("POST", "http://localhost:11434/api/generate", true)
+    http.SetRequestHeader("Content-Type", "application/json; charset=utf-8")
+    http.Send(json)
+    g_HttpChat := http ; 记录对象用于轮询
+    g_ChatPending := true
+  } catch Error as e {
+    g_AnswerEditCtrl.Value := "请求启动失败: " . e.Message
+    g_SendBtnCtrl.Enabled := true
     return
   }
   
@@ -423,10 +428,9 @@ StartChatAsync(question)
 
 CheckChatResult()
 {
-  global g_ChatPending, g_StreamFileChat, g_StreamContentChat, g_StreamPidChat
-  global g_AnswerEditCtrl, g_SendBtnCtrl
+  global g_ChatPending, g_HttpChat, g_AnswerEditCtrl, g_SendBtnCtrl, g_StreamContentChat
   
-  if (!g_ChatPending)
+  if (!g_ChatPending || !IsObject(g_HttpChat))
     return
   
   ; 检查控件是否已被销毁
@@ -435,19 +439,21 @@ CheckChatResult()
     return
   }
   
-  ; 检查是否完成
-  if (g_StreamFileChat != "" && FileExist(g_StreamFileChat)) {
-    if (IsStreamComplete(g_StreamFileChat)) {
-      Sleep(200)
-      result := ReadStreamFile(g_StreamFileChat, &g_StreamContentChat)
-      if (result != "" && g_AnswerEditCtrl != "") {
-        ; 转换换行符
-        result := StrReplace(result, "\n", "`n")
-        try g_AnswerEditCtrl.Value := result
+  ; 检查状态 (3=Receiving, 4=Complete)
+  if (g_HttpChat.readyState >= 3) {
+    try {
+      result := ParseStreamData(g_HttpChat.responseText, &g_StreamContentChat)
+      if (result != "") {
+        ; 实时更新回答框内容
+        g_AnswerEditCtrl.Value := result
       }
+    }
+    
+    ; 如果完成，清理
+    if (g_HttpChat.readyState == 4) {
       g_ChatPending := false
-      if (g_SendBtnCtrl != "")
-        try g_SendBtnCtrl.Enabled := true
+      g_SendBtnCtrl.Enabled := true
+      g_HttpChat := ""
       SetTimer(CheckChatResult, 0)
     }
   }
@@ -645,47 +651,22 @@ IsImeComposing()
   return (compLen > 0)
 }
 
-; ===== 共享流式文件处理函数 =====
-
-IsStreamComplete(filePath)
+ParseStreamData(rawContent, &accumulatedContent)
 {
-  if (!FileExist(filePath))
-    return false
-  try {
-    f := FileOpen(filePath, "r", "UTF-8")
-    if (!f)
-      return false
-    content := f.Read()
-    f.Close()
-    return InStr(content, '"done":true')
-  } catch {
-    return false
-  }
-}
-
-ReadStreamFile(filePath, &accumulatedContent)
-{
-  if (!FileExist(filePath))
-    return ""
-  
-  try {
-    f := FileOpen(filePath, "r", "UTF-8")
-    if (!f)
-      return accumulatedContent
-    content := f.Read()
-    f.Close()
-  } catch {
+  if (rawContent = "")
     return accumulatedContent
-  }
   
   result := ""
-  Loop Parse, content, "`n", "`r"
+  Loop Parse, rawContent, "`n", "`r"
   {
     line := Trim(A_LoopField)
-    if (line = "")
+    if (line = "" || !InStr(line, "{"))
       continue
+    
+    ; 简单的 JSON 提取，避免引用大型库
     if RegExMatch(line, '"response":"((?:[^"\\]|\\.)*)"', &m) {
       token := m[1]
+      ; 基础转义还原
       token := StrReplace(token, "\n", "`n")
       token := StrReplace(token, "\r", "`r")
       token := StrReplace(token, "\t", "`t")
@@ -695,15 +676,19 @@ ReadStreamFile(filePath, &accumulatedContent)
     }
   }
   
+  ; 处理并清理 think 标签
   result := RegExReplace(result, "s)<think>.*?</think>", "")
-  result := StrReplace(result, "<think>", "")
-  result := StrReplace(result, "</think>", "")
-  result := StrReplace(result, "/think", "")
-  result := StrReplace(result, "/no_think", "")
-  result := Trim(result)
+  result := StrReplace(result, "<think>")
+  result := StrReplace(result, "</think>")
+  result := StrReplace(result, "/think")
+  result := StrReplace(result, "/no_think")
   
   if (result != "")
     accumulatedContent := result
   
   return accumulatedContent
 }
+
+; 保留旧函数名作为兼容性代理，但逻辑改为 ParseStreamData
+IsStreamComplete(filePath) => FileExist(filePath) && InStr(FileRead(filePath), '"done":true')
+ReadStreamFile(filePath, &accumulatedContent) => ParseStreamData(FileRead(filePath), &accumulatedContent)
