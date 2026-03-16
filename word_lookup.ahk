@@ -389,6 +389,7 @@ ShowWordPopup(word, context, posX, posY)
   HotIfWinActive("ahk_id " g_WL_Gui.Hwnd)
   Hotkey("Escape", WL_HandleEsc, "On")
   Hotkey("Enter", WL_HandleEnter, "On")
+  Hotkey("NumpadEnter", WL_HandleEnter, "On")
   Hotkey("!Left", (*) => WL_NavHistory(-1), "On")
   Hotkey("!Right", (*) => WL_NavHistory(1), "On")
   ; 文本操作增强
@@ -434,6 +435,13 @@ WL_HandleEnter(*)
 {
   global g_WL_WordEdit, g_WL_ContextEdit, g_WL_ResultCtrl, WL_CurrentWord, WL_CurrentContext
   global g_QuestionEditCtrl, g_AnswerEditCtrl
+
+  ; 检测输入法是否处于组合状态（正在输入中文）
+  if (IsImeComposing()) {
+    ; 让回车键正常传递给输入法确认候选词
+    Send("{Enter}")
+    return
+  }
 
   if (g_WL_WordEdit = "")
     return
@@ -774,6 +782,7 @@ CloseWordGui()
       HotIfWinActive("ahk_id " g_WL_Gui.Hwnd)
       Hotkey("Escape", WL_HandleEsc, "Off")
       Hotkey("Enter", WL_HandleEnter, "Off")
+      Hotkey("NumpadEnter", WL_HandleEnter, "Off")
       Hotkey("!Left", "Off")
       Hotkey("!Right", "Off")
       HotIfWinActive()
