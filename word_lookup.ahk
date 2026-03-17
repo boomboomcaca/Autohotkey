@@ -106,9 +106,11 @@ F2::
       }
       if (!found && el.Name != "") {
         rawName := Trim(el.Name)
-        ; [Fix] 过滤浏览器自带的图片辅助说明占位文本 (如 "要获取缺失的图片说明...")
-        if (InStr(rawName, "获取缺失的图片说明") || InStr(rawName, "missing image descriptions")) {
-           ; 跳过，这通常是浏览器产生的无效 UIA 标签，触发后续 OCR
+        ; [Fix] 过滤浏览器自带的图片辅助说明或通用占位文本 (如 "要获取缺失的图片说明...", "Logo", "Icon" 等)
+        ; 只要 UIA 的 TextPattern 没抓到真实文本，且 Name 是这类通用标签，就跳过并回退到 OCR
+        genericLabels := "Logo|Icon|Image|Picture|Graphic|Illustration|Avatar|Banner|SVG|Brand"
+        if (InStr(rawName, "获取缺失的图片说明") || InStr(rawName, "missing image descriptions") || RegExMatch(rawName, "i)^(" . genericLabels . ")$")) {
+           ; 跳过，这通常是浏览器或网页产生的无效 UIA 标签，触发优先级 2 的 OCR 识别画面真实内容
         } else if (rawName != "" && !RegExMatch(rawName, "\s") && StrLen(rawName) < 50) {
           cleanedWord := RegExReplace(rawName, "^[^\w\x{4e00}-\x{9fa5}\-]+|[^\w\x{4e00}-\x{9fa5}\-]+$", "")
           if (cleanedWord != "") {
