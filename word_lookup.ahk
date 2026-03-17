@@ -106,7 +106,10 @@ F2::
       }
       if (!found && el.Name != "") {
         rawName := Trim(el.Name)
-        if (rawName != "" && !RegExMatch(rawName, "\s") && StrLen(rawName) < 50) {
+        ; [Fix] 过滤浏览器自带的图片辅助说明占位文本 (如 "要获取缺失的图片说明...")
+        if (InStr(rawName, "获取缺失的图片说明") || InStr(rawName, "missing image descriptions")) {
+           ; 跳过，这通常是浏览器产生的无效 UIA 标签，触发后续 OCR
+        } else if (rawName != "" && !RegExMatch(rawName, "\s") && StrLen(rawName) < 50) {
           cleanedWord := RegExReplace(rawName, "^[^\w\x{4e00}-\x{9fa5}\-]+|[^\w\x{4e00}-\x{9fa5}\-]+$", "")
           if (cleanedWord != "") {
             word := cleanedWord
@@ -123,7 +126,7 @@ F2::
   ; 【优先级 2】: Windows 10/11 原生 WinRT OCR API - 屏幕极速截取
   ; ==========================================================
   if (!found) {
-    ToolTip("🔍 画面分析中...")
+    ToolTip("Analyzing Screen...")
     try {
       dpi := 96
       try dpi := DllCall("GetDpiForWindow", "Ptr", winUnder, "UInt")
@@ -139,7 +142,7 @@ F2::
       try {
         ocrResult := OCR.FromRect(winX, winY, captureW, captureH, {Language: "en-US"})
       } catch {
-        ToolTip("⚠️ 系统缺失英文OCR语言包，已自动降级为默认语言！`n请在 Windows 设置 -> 语言 中添加【English (United States)】并勾选【光学字符识别】！")
+        ToolTip("Warning: OCR Language Package Missing. Please install English (United States) in Windows Settings.")
         SetTimer(ToolTip, -5000)
         ocrResult := OCR.FromRect(winX, winY, captureW, captureH)
       }
@@ -260,7 +263,7 @@ ShowWordPopup(word, context, posX, posY)
     g_WL_WordEdit.Value := word
     g_WL_ContextEdit.Value := (context != "" && context != word) ? context : ""
     g_QuestionEditCtrl.Value := word
-    g_WL_ResultCtrl.Value := "⏳ 正在查询..."
+    g_WL_ResultCtrl.Value := "Querying..."
 
     ; 重置悬停自动关闭的检测状态，防止刚更新完就消失
     global g_WL_InitMouseX, g_WL_InitMouseY, g_WL_MouseMoved, g_WL_ShowTick
@@ -314,7 +317,7 @@ ShowWordPopup(word, context, posX, posY)
 
   ; 结果区域（可选中复制）
   g_WL_Gui.SetFont("s10 c333333 Norm", "Microsoft YaHei")
-  g_WL_ResultCtrl := g_WL_Gui.AddEdit("xs w320 h265 ReadOnly -E0x200", "⏳ 正在查询...")
+  g_WL_ResultCtrl := g_WL_Gui.AddEdit("xs w320 h265 ReadOnly -E0x200", "Querying...")
 
   ; ==========================================================
   ; AI 问答区域 (右侧面板)
@@ -336,7 +339,7 @@ ShowWordPopup(word, context, posX, posY)
 
   g_WL_Gui.SetFont("s9 c333333", "Microsoft YaHei")
   g_WL_Gui.AddText("xs Section", "问题:")
-  g_TtsQuestionCtrl := g_WL_Gui.AddText("x+5 ys cGray", "🔊")
+  g_TtsQuestionCtrl := g_WL_Gui.AddText("x+5 ys cGray", "[Play]")
   g_TtsQuestionCtrl.OnEvent("Click", Gui_PlayQuestion)
   
   g_QuestionEditCtrl := g_WL_Gui.AddEdit("xs w255 h50 -E0x200", word)
@@ -460,7 +463,7 @@ WL_HandleEnter(*)
   WL_CurrentWord := newWord
   WL_CurrentContext := newContext
   if (g_WL_ResultCtrl != "")
-    g_WL_ResultCtrl.Value := "⏳ 正在查询..."
+    g_WL_ResultCtrl.Value := "Querying..."
   if (g_AnswerEditCtrl != "")
     g_AnswerEditCtrl.Value := ""
   
@@ -547,7 +550,7 @@ WL_ToggleLang()
   try IniWrite(g_WL_LangMode, A_ScriptDir . "\\ollama_config.ini", "Settings", "WordLookupLang")
   
   if (g_WL_ResultCtrl != "") {
-    g_WL_ResultCtrl.Value := "⏳ 正在切换语言并重新查询..."
+    g_WL_ResultCtrl.Value := "Switching language and re-querying..."
   }
 
   ; 重新发起请求
@@ -595,9 +598,9 @@ StartWordOllamaRequest(word, context, isNavigating := false)
     if (context != "" && context != word)
       prompt .= " Please explain its meaning in the following context:\nContext: " . context
 
-    prompt .= "\n\nPlease output using the following format (plain text only, no Markdown):\n● Part of Speech: xxx\n● Word Roots: [Break down prefixes, roots, suffixes with origins and meanings, e.g. 'un-(not) + break-(break) + -able(capable of)']\n● Definition: [Simple English definition]\n● Context Meaning: [Explanation based on the given context, if any]\n● Collocations: [Common collocations or examples]"
+    prompt .= "\n\nPlease output using the following format (plain text only):\n- Part of Speech: xxx\n- Word Roots: [Break down prefixes, roots, suffixes with origins and meanings]\n- Definition: [Simple English definition]\n- Context Meaning: [Explanation based on the given context]\n- Collocations: [Common collocations or examples]"
     
-    sysPrompt := "Output ONLY in English. Use plain text without Markdown formatting (no asterisks, hashes, etc.). Keep explanations concise and easy to understand."
+    sysPrompt := "Output ONLY in English. Use plain text without Markdown formatting. Keep explanations concise."
   } else {
     ; 构建 prompt (英汉释义模式)
     prompt := "你是一个英语词典。解释单词 '" . word . "'"
@@ -606,7 +609,7 @@ StartWordOllamaRequest(word, context, isNavigating := false)
     else
       prompt .= " 的含义。"
 
-    prompt .= "\n\n请用以下格式输出（纯文本，不用Markdown）：\n● 词性：xxx\n● 词根拆解：拆分前缀、词根、后缀，标注来源和含义（如 un-表否定 + break打破 + -able表能力）\n● 释义：xxx\n● 语境释义：在这个句子中表示...\n● 常见搭配：xxx"
+    prompt .= "\n\n请用以下格式输出（纯文本）：\n- 词性：xxx\n- 词根拆解：拆分前缀、词根、后缀，标注来源和含义\n- 释义：xxx\n- 语境释义：在这个句子中表示...\n- 常见搭配：xxx"
     
     sysPrompt := "纯文本输出，不要用任何符号（如反斜杠、星号、井号）包裹或强调单词。简洁回答。"
   }
