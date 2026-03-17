@@ -130,8 +130,8 @@ F2::
       if (dpi < 96)
         dpi := 96
       scale := 1 ; WinRT OCR 不需要强制放大，原生支持得很好
-      captureW := Round(600 * scale)
-      captureH := Round(400 * scale)
+      captureW := Round(3840 * scale)
+      captureH := Round(2160 * scale)
       winX := mouseX - Round(captureW / 2)
       winY := mouseY - Round(captureH / 2)
       
@@ -149,7 +149,7 @@ F2::
         bestWord := ""
         bestLine := ""
         
-        for ocrLine in ocrResult.Lines {
+        for lineIndex, ocrLine in ocrResult.Lines {
           for index, ocrWord in ocrLine.Words {
             cx := ocrWord.x + ocrWord.w / 2
             cy := ocrWord.y + ocrWord.h / 2
@@ -159,7 +159,7 @@ F2::
               bestWord := ocrWord.Text
               bestDist := 0
               bestIndex := index
-              bestLineIndex := A_Index
+              bestLineIndex := lineIndex
               bestLineObj := ocrLine
               break
             }
@@ -168,7 +168,7 @@ F2::
               bestDist := dist
               bestWord := ocrWord.Text
               bestIndex := index
-              bestLineIndex := A_Index
+              bestLineIndex := lineIndex
               bestLineObj := ocrLine
             }
           }
