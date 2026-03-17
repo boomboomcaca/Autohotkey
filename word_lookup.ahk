@@ -390,6 +390,16 @@ ShowWordPopup(word, context, posX, posY)
   g_QuestionEditCtrl.Focus()
   SendMessage(0x00B1, -1, -1, g_QuestionEditCtrl.Hwnd)
 
+  ; 内部辅助：检测当前是否在可编辑控件中，若是则优先使用 Windows 标准键位
+  WL_IsEditFocused() {
+    try {
+      focused := ControlGetFocus("A")
+      if focused
+        return (WinGetClass(focused) = "Edit")
+    }
+    return false
+  }
+
   ; 绑定 Esc/Enter、历史记录导航、以及 Emacs 文本操作 (参照主窗口处理)
   HotIfWinActive("ahk_id " g_WL_Gui.Hwnd)
   Hotkey("Escape", WL_HandleEsc, "On")
@@ -403,20 +413,21 @@ ShowWordPopup(word, context, posX, posY)
   Hotkey("^v", Gui_PasteAsText, "On")
   Hotkey("^Backspace", Gui_DeleteWord, "On")
   ; 显式绑定 Emacs 核心快捷键，确保在无标题窗口中也生效
-  Hotkey("^a", (*) => (is_target() ? Send("^a") : move_beginning_of_line()), "On")
-  Hotkey("^e", (*) => (is_target() ? Send("^e") : move_end_of_line()), "On")
-  Hotkey("^p", (*) => (is_target() ? Send("^p") : previous_line()), "On")
-  Hotkey("^n", (*) => (is_target() ? Send("^n") : next_line()), "On")
-  Hotkey("^f", (*) => (is_target() ? Send("^f") : forward_char()), "On")
-  Hotkey("^b", (*) => (is_target() ? Send("^b") : backward_char()), "On")
-  Hotkey("^d", (*) => (is_target() ? Send("^d") : delete_char()), "On")
-  Hotkey("^h", (*) => (is_target() ? Send("^h") : delete_backward_char()), "On")
-  Hotkey("^k", (*) => (is_target() ? Send("^k") : kill_line()), "On")
-  Hotkey("^w", (*) => (is_target() ? Send("^w") : kill_region()), "On")
-  Hotkey("!w", (*) => (is_target() ? Send("!w") : kill_ring_save()), "On")
-  Hotkey("^y", (*) => (is_target() ? Send("^y") : yank()), "On")
-  Hotkey("^g", (*) => (is_target() ? Send("^g") : quit()), "On")
-  Hotkey("^/", (*) => (is_target() ? Send("^/") : undo()), "On")
+  ; 增加 WL_IsEditFocused 判定：如果在编辑框内，则优先允许标准功能 (如 Ctrl+A 全选)
+  Hotkey("^a", (*) => (is_target() || WL_IsEditFocused() ? Send("^a") : move_beginning_of_line()), "On")
+  Hotkey("^e", (*) => (is_target() || WL_IsEditFocused() ? Send("^e") : move_end_of_line()), "On")
+  Hotkey("^p", (*) => (is_target() || WL_IsEditFocused() ? Send("^p") : previous_line()), "On")
+  Hotkey("^n", (*) => (is_target() || WL_IsEditFocused() ? Send("^n") : next_line()), "On")
+  Hotkey("^f", (*) => (is_target() || WL_IsEditFocused() ? Send("^f") : forward_char()), "On")
+  Hotkey("^b", (*) => (is_target() || WL_IsEditFocused() ? Send("^b") : backward_char()), "On")
+  Hotkey("^d", (*) => (is_target() || WL_IsEditFocused() ? Send("^d") : delete_char()), "On")
+  Hotkey("^h", (*) => (is_target() || WL_IsEditFocused() ? Send("^h") : delete_backward_char()), "On")
+  Hotkey("^k", (*) => (is_target() || WL_IsEditFocused() ? Send("^k") : kill_line()), "On")
+  Hotkey("^w", (*) => (is_target() || WL_IsEditFocused() ? Send("^w") : kill_region()), "On")
+  Hotkey("!w", (*) => (is_target() || WL_IsEditFocused() ? Send("!w") : kill_ring_save()), "On")
+  Hotkey("^y", (*) => (is_target() || WL_IsEditFocused() ? Send("^y") : yank()), "On")
+  Hotkey("^g", (*) => (is_target() || WL_IsEditFocused() ? Send("^g") : quit()), "On")
+  Hotkey("^/", (*) => (is_target() || WL_IsEditFocused() ? Send("^/") : undo()), "On")
   HotIfWinActive()
 
   ; 启动鼠标移出关闭的检测定时器

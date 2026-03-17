@@ -542,7 +542,7 @@ Gui_PasteAsText(*)
     focusedHwnd := ControlGetFocus("A")
     
     ; 只在可编辑的输入框中粘贴（在光标位置插入，不覆盖全部内容）
-    if (focusedHwnd = g_OrigEditCtrl.Hwnd || focusedHwnd = g_QuestionEditCtrl.Hwnd) {
+    if (focusedHwnd = g_OrigEditCtrl.Hwnd || focusedHwnd = g_QuestionEditCtrl.Hwnd || (IsSet(g_WL_WordEdit) && g_WL_WordEdit != "" && focusedHwnd = g_WL_WordEdit.Hwnd)) {
       EditPaste(clipText, focusedHwnd)
     }
   }
@@ -596,9 +596,13 @@ Gui_ToggleFocus(*)
   ; 获取当前焦点控件
   focusedHwnd := ControlGetFocus("A")
   
-  ; 在原文输入框和 AI 问题输入框之间切换
-  if (focusedHwnd = g_OrigEditCtrl.Hwnd) {
+  ; 在单词输入框、原文输入框和 AI 问题输入框之间切换
+  if (IsSet(g_WL_WordEdit) && g_WL_WordEdit != "" && focusedHwnd = g_WL_WordEdit.Hwnd) {
+    g_OrigEditCtrl.Focus()
+  } else if (focusedHwnd = g_OrigEditCtrl.Hwnd) {
     g_QuestionEditCtrl.Focus()
+  } else if (IsSet(g_WL_WordEdit) && g_WL_WordEdit != "") {
+    g_WL_WordEdit.Focus()
   } else {
     g_OrigEditCtrl.Focus()
   }
