@@ -18,6 +18,10 @@ WL_CurrentContext := ""
 g_WL_LangMode := "EN"
 try g_WL_LangMode := IniRead(A_ScriptDir . "\ollama_config.ini", "Settings", "WordLookupLang", "EN")
 g_WL_LangBtn := ""
+g_WL_QuestionLabel := ""
+g_WL_AnswerLabel := ""
+g_WL_PromptLabel := ""
+g_WL_BottomHint := ""
 g_WL_StreamFile := ""
 g_WL_StreamPid := 0
 g_WL_Pending := false
@@ -272,6 +276,7 @@ ShowWordPopup(word, context, posX, posY)
   global g_WL_Gui, g_WL_ResultCtrl, g_WL_TitleCtrl, g_WL_WordEdit, g_WL_ContextEdit, WL_CurrentWord, WL_CurrentContext, g_WL_LangMode, g_WL_LangBtn
   global g_IsChineseMode, g_QuestionEditCtrl, g_AnswerEditCtrl, g_SendBtnCtrl, g_PromptDropdown
   global g_MainGui, g_OrigEditCtrl, g_PromptNames, g_SelectedPrompt, g_PromptManageBtn, g_TtsQuestionCtrl
+  global g_WL_QuestionLabel, g_WL_AnswerLabel, g_WL_PromptLabel, g_WL_BottomHint
   WL_CurrentWord := word
   WL_CurrentContext := context
   g_IsChineseMode := RegExMatch(word, "[\x{4e00}-\x{9fff}]")
@@ -281,7 +286,7 @@ ShowWordPopup(word, context, posX, posY)
     g_WL_WordEdit.Value := word
     g_WL_ContextEdit.Value := (context != "" && context != word) ? context : ""
     g_QuestionEditCtrl.Value := word
-    g_WL_ResultCtrl.Value := "Querying..."
+    g_WL_ResultCtrl.Value := (g_WL_LangMode = "EN" ? "Querying..." : "正在查询...")
 
     ; 重置悬停自动关闭的检测状态，防止刚更新完就消失
     global g_WL_InitMouseX, g_WL_InitMouseY, g_WL_MouseMoved, g_WL_ShowTick
@@ -335,13 +340,13 @@ ShowWordPopup(word, context, posX, posY)
 
   ; 结果区域（可选中复制）
   g_WL_Gui.SetFont("s10 c333333 Norm", "Microsoft YaHei")
-  g_WL_ResultCtrl := g_WL_Gui.AddEdit("xs w320 h265 ReadOnly -E0x200", "Querying...")
+  g_WL_ResultCtrl := g_WL_Gui.AddEdit("xs w320 h265 ReadOnly -E0x200", g_WL_LangMode = "EN" ? "Querying..." : "正在查询...")
 
   ; ==========================================================
   ; AI 问答区域 (右侧面板)
   ; ==========================================================
   g_WL_Gui.SetFont("s9 c666666", "Microsoft YaHei")
-  g_WL_Gui.AddText("x350 y12 w50 Section", "Prompt:")
+  g_WL_PromptLabel := g_WL_Gui.AddText("x350 y12 w50 Section", g_WL_LangMode = "EN" ? "Prompt:" : "提示词:")
   
   promptList := ""
   for name in g_PromptNames {
@@ -352,24 +357,24 @@ ShowWordPopup(word, context, posX, posY)
     g_PromptDropdown.Text := g_SelectedPrompt
   g_PromptDropdown.OnEvent("Change", Gui_PromptChanged)
   
-  g_PromptManageBtn := g_WL_Gui.AddButton("x+5 yp w58 h24", "管理")
+  g_PromptManageBtn := g_WL_Gui.AddButton("x+5 yp w58 h24", g_WL_LangMode = "EN" ? "Manage" : "管理")
   g_PromptManageBtn.OnEvent("Click", Gui_ManagePrompts)
 
   g_WL_Gui.SetFont("s9 c333333", "Microsoft YaHei")
-  g_WL_Gui.AddText("xs Section", "问题:")
+  g_WL_QuestionLabel := g_WL_Gui.AddText("xs Section", g_WL_LangMode = "EN" ? "Question:" : "问题:")
   g_TtsQuestionCtrl := g_WL_Gui.AddText("x+5 ys cGray", "🔊")
   g_TtsQuestionCtrl.OnEvent("Click", Gui_PlayQuestion)
   
   g_QuestionEditCtrl := g_WL_Gui.AddEdit("xs w255 h50 -E0x200", word)
-  g_SendBtnCtrl := g_WL_Gui.AddButton("x+5 yp w60 h50", "发送")
+  g_SendBtnCtrl := g_WL_Gui.AddButton("x+5 yp w60 h50", g_WL_LangMode = "EN" ? "Send" : "发送")
   g_SendBtnCtrl.OnEvent("Click", Gui_SendQuestion)
 
-  g_WL_Gui.AddText("xs", "回答:")
+  g_WL_AnswerLabel := g_WL_Gui.AddText("xs", g_WL_LangMode = "EN" ? "Answer:" : "回答:")
   g_AnswerEditCtrl := g_WL_Gui.AddEdit("xs w320 h197 ReadOnly -E0x200", "")
 
   ; 底部提示
   g_WL_Gui.SetFont("s8 cAAAAAA", "Microsoft YaHei")
-  g_WL_Gui.AddText("xm w650", "Enter 重新查询 | 鼠标移出关闭 | Esc 关闭 | Tab 切换焦点")
+  g_WL_BottomHint := g_WL_Gui.AddText("xm w650", g_WL_LangMode = "EN" ? "Enter to Re-query | Mouse out to Close | Esc to Close | Tab to Switch Focus" : "Enter 重新查询 | 鼠标移出关闭 | Esc 关闭 | Tab 切换焦点")
 
   ; 先在屏幕外显示一次，获取窗口的真实尺寸
   g_WL_Gui.Show("x-9999 y-9999 NoActivate")
@@ -492,7 +497,7 @@ WL_HandleEnter(*)
   WL_CurrentWord := newWord
   WL_CurrentContext := newContext
   if (g_WL_ResultCtrl != "")
-    g_WL_ResultCtrl.Value := "Querying..."
+    g_WL_ResultCtrl.Value := (g_WL_LangMode = "EN" ? "Querying..." : "正在查询...")
   if (g_AnswerEditCtrl != "")
     g_AnswerEditCtrl.Value := ""
   
@@ -567,23 +572,51 @@ WL_CheckClickOutside()
 ; ===== 切换语言 =====
 WL_ToggleLang()
 {
-  global g_WL_LangMode, g_WL_LangBtn, WL_CurrentWord, WL_CurrentContext, g_WL_ResultCtrl
+    global g_WL_LangMode, g_WL_LangBtn, WL_CurrentWord, WL_CurrentContext, g_WL_ResultCtrl
+    global g_WL_QuestionLabel, g_WL_AnswerLabel, g_WL_PromptLabel, g_WL_BottomHint, g_SendBtnCtrl, g_PromptManageBtn
 
-  if (g_WL_LangMode = "EN") {
-    g_WL_LangMode := "ZH"
-    g_WL_LangBtn.Text := "中"
-  } else {
-    g_WL_LangMode := "EN"
-    g_WL_LangBtn.Text := "EN"
-  }
-  try IniWrite(g_WL_LangMode, A_ScriptDir . "\\ollama_config.ini", "Settings", "WordLookupLang")
-  
-  if (g_WL_ResultCtrl != "") {
-    g_WL_ResultCtrl.Value := "Switching language and re-querying..."
-  }
-
-  ; 重新发起请求
-  StartWordOllamaRequest(WL_CurrentWord, WL_CurrentContext)
+    if (g_WL_LangMode = "EN")
+    {
+        g_WL_LangMode := "ZH"
+        g_WL_LangBtn.Text := "中"
+        if (g_WL_QuestionLabel) 
+            g_WL_QuestionLabel.Value := "问题:"
+        if (g_WL_AnswerLabel) 
+            g_WL_AnswerLabel.Value := "回答:"
+        if (g_WL_PromptLabel) 
+            g_WL_PromptLabel.Value := "提示词:"
+        if (g_WL_BottomHint) 
+            g_WL_BottomHint.Value := "Enter 重新查询 | 鼠标移出关闭 | Esc 关闭 | Tab 切换焦点"
+        if (g_SendBtnCtrl) 
+            g_SendBtnCtrl.Text := "发送"
+        if (g_PromptManageBtn) 
+            g_PromptManageBtn.Text := "管理"
+        if (g_WL_ResultCtrl) 
+            g_WL_ResultCtrl.Value := "正在切换语言并重新查询..."
+    }
+    else
+    {
+        g_WL_LangMode := "EN"
+        g_WL_LangBtn.Text := "EN"
+        if (g_WL_QuestionLabel) 
+            g_WL_QuestionLabel.Value := "Question:"
+        if (g_WL_AnswerLabel) 
+            g_WL_AnswerLabel.Value := "Answer:"
+        if (g_WL_PromptLabel) 
+            g_WL_PromptLabel.Value := "Prompt:"
+        if (g_WL_BottomHint) 
+            g_WL_BottomHint.Value := "Enter to Re-query | Mouse out to Close | Esc to Close | Tab to Switch Focus"
+        if (g_SendBtnCtrl) 
+            g_SendBtnCtrl.Text := "Send"
+        if (g_PromptManageBtn) 
+            g_PromptManageBtn.Text := "Manage"
+        if (g_WL_ResultCtrl) 
+            g_WL_ResultCtrl.Value := "Switching language and re-querying..."
+    }
+    try IniWrite(g_WL_LangMode, A_ScriptDir . "\ollama_config.ini", "Settings", "WordLookupLang")
+    
+    ; 重新发起请求
+    StartWordOllamaRequest(WL_CurrentWord, WL_CurrentContext)
 }
 
 ; ===== 发起 Ollama 语境解释请求 =====
@@ -973,7 +1006,7 @@ WL_NavHistory(dir)
 
   } else {
     if (g_WL_ResultCtrl != "")
-      g_WL_ResultCtrl.Value := "⏳ 正在查询..."
+      g_WL_ResultCtrl.Value := (g_WL_LangMode = "EN" ? "⏳ Querying..." : "⏳ 正在查询...")
     StartWordOllamaRequest(item.word, item.context, true)
   }
 
