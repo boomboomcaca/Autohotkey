@@ -92,7 +92,23 @@ F2::
           rawWord := Trim(range.GetText())
           
           lineRange.ExpandToEnclosingUnit(UIA.TextUnit.Paragraph)
-          rawLine := RegExReplace(Trim(lineRange.GetText()), "s)[\r\n]+", " ") ; 替换换行符为空格，保持单行结构传给 Ollama
+          rawLine := RegExReplace(Trim(lineRange.GetText()), "s)[\r\n]+", " ") ; 基础行
+
+          ; --- 优化：尝试获取 UIA 上下文（增加上下各一行） ---
+          try {
+              p_prev := lineRange.Clone()
+              p_prev.Move(UIA.TextUnit.Paragraph, -1)
+              txt_prev := Trim(p_prev.GetText())
+              if (txt_prev != "" && txt_prev != rawLine)
+                  rawLine := txt_prev . " " . rawLine
+                  
+              p_next := lineRange.Clone()
+              p_next.Move(UIA.TextUnit.Paragraph, 1)
+              txt_next := Trim(p_next.GetText())
+              if (txt_next != "" && txt_next != rawLine && !InStr(rawLine, txt_next))
+                  rawLine := rawLine . " " . txt_next
+          }
+          ; ----------------------------------------------
 
           if (rawWord != "" && !RegExMatch(rawWord, "\s")) {
             cleanedWord := RegExReplace(rawWord, "^[^\w\x{4e00}-\x{9fa5}\-]+|[^\w\x{4e00}-\x{9fa5}\-]+$", "")
@@ -181,11 +197,11 @@ F2::
             break
         }
         
-        ; 收集上下文行 (向上最多取2行，向下最多取2行)
+        ; 收集上下文行 (向上最多取3行，向下最多取3行，增加范围)
         bestLine := ""
         if (IsSet(bestLineIndex)) {
-          startLineIdx := Max(1, bestLineIndex - 2)
-          endLineIdx := Min(ocrResult.Lines.Length, bestLineIndex + 2)
+          startLineIdx := Max(1, bestLineIndex - 3)
+          endLineIdx := Min(ocrResult.Lines.Length, bestLineIndex + 3)
           for i, lObj in ocrResult.Lines {
             if (i >= startLineIdx && i <= endLineIdx) {
               bestLine .= (bestLine=""?"":" ") . lObj.Text
@@ -200,8 +216,8 @@ F2::
             while (tempIndex > 0) {
                 prevWord := bestLineObj.Words[tempIndex]
                 currWord := bestLineObj.Words[tempIndex + 1]
-                ; 判断间距小于 4 像素 (紧密相连)，则属于被误拆分的一个词
-                if (currWord.x - (prevWord.x + prevWord.w) <= 4) {
+                ; 判断间距阈值调大 (由 4 像素增加到 15 像素)，支持大字体识别
+                if (currWord.x - (prevWord.x + prevWord.w) <= 15) {
                     bestWord := prevWord.Text . bestWord
                     tempIndex--
                 } else {
@@ -213,8 +229,8 @@ F2::
             while (tempIndex <= bestLineObj.Words.Length) {
                 nextWord := bestLineObj.Words[tempIndex]
                 currWord := bestLineObj.Words[tempIndex - 1]
-                ; 与后一个单词紧密相连
-                if (nextWord.x - (currWord.x + currWord.w) <= 4) {
+                ; 判断间距阈值调大
+                if (nextWord.x - (currWord.x + currWord.w) <= 15) {
                     bestWord := bestWord . nextWord.Text
                     tempIndex++
                 } else {
