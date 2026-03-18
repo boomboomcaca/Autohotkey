@@ -221,7 +221,7 @@ F2::
                 prevWord := bestLineObj.Words[tempIndex]
                 currWord := bestLineObj.Words[tempIndex + 1]
                 ; 判断间距阈值调大 (由 4 像素增加到 15 像素)，支持大字体识别
-                if (currWord.x - (prevWord.x + prevWord.w) <= 15) {
+                if (currWord.x - (prevWord.x + prevWord.w) <= 4) {
                     bestWord := prevWord.Text . bestWord
                     tempIndex--
                 } else {
@@ -234,7 +234,7 @@ F2::
                 nextWord := bestLineObj.Words[tempIndex]
                 currWord := bestLineObj.Words[tempIndex - 1]
                 ; 判断间距阈值调大
-                if (nextWord.x - (currWord.x + currWord.w) <= 15) {
+                if (nextWord.x - (currWord.x + currWord.w) <= 4) {
                     bestWord := bestWord . nextWord.Text
                     tempIndex++
                 } else {
