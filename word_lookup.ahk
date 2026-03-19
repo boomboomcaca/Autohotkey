@@ -636,7 +636,7 @@ StartWordOllamaRequest(word, context, isNavigating := false)
     if (context != "" && context != word)
       prompt .= " Please explain its meaning in the following context:\nContext: " . context
 
-    prompt .= "\n\nPlease output using the following format (plain text only):\n- Part of Speech: xxx\n- Word Roots: [Break down prefixes, roots, suffixes with origins and meanings]\n- Definition: [Simple English definition]\n- Context Meaning: [Explanation based on the given context]\n- Collocations: [Common collocations or examples]"
+    prompt .= "\n\nPlease output using the following format (plain text only):\n● Part of Speech: xxx\n● Word Roots: [Break down prefixes, roots, suffixes with origins and meanings]\n● Definition: [Simple English definition]\n● Context Meaning: [Explanation based on the given context]\n● Collocations: [Common collocations or examples]"
     
     sysPrompt := "Output ONLY in English. Use plain text without Markdown formatting. Keep explanations concise."
   } else {
@@ -647,7 +647,7 @@ StartWordOllamaRequest(word, context, isNavigating := false)
     else
       prompt .= " 的含义。"
 
-    prompt .= "\n\n请用以下格式输出（纯文本）：\n- 词性：xxx\n- 词根拆解：拆分前缀、词根、后缀，标注来源和含义\n- 释义：xxx\n- 语境释义：在这个句子中表示...\n- 常见搭配：xxx"
+    prompt .= "\n\n请用以下格式输出（纯文本）：\n● 词性：xxx\n● 词根拆解：拆分前缀、词根、后缀，标注来源和含义\n● 释义：xxx\n● 语境释义：在这个句子中表示...\n● 常见搭配：xxx"
     
     sysPrompt := "纯文本输出，不要用任何符号（如反斜杠、星号、井号）包裹或强调单词。简洁回答。"
   }
