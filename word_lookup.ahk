@@ -277,6 +277,8 @@ ShowWordPopup(word, context, posX, posY)
   global g_IsChineseMode, g_QuestionEditCtrl, g_AnswerEditCtrl, g_SendBtnCtrl, g_PromptDropdown
   global g_MainGui, g_OrigEditCtrl, g_PromptNames, g_SelectedPrompt, g_PromptManageBtn, g_TtsQuestionCtrl
   global g_WL_QuestionLabel, g_WL_AnswerLabel, g_WL_PromptLabel, g_WL_BottomHint
+  word := StripEmoji(word)
+  context := StripEmoji(context)
   WL_CurrentWord := word
   WL_CurrentContext := context
   g_IsChineseMode := RegExMatch(word, "[\x{4e00}-\x{9fff}]")
@@ -690,8 +692,9 @@ StartWordOllamaRequest(word, context, isNavigating := false)
   try FileDelete(g_WL_StreamFile)
   try FileDelete(jsonFile)
 
-  ; JSON
-  json := '{"model":"huihui_ai/qwen3-abliterated:8b-v2","system":"' . sysPrompt . '","prompt":"' . prompt . '","stream":true,"options":{"temperature":0,"num_predict":800}}'
+  ; JSON (OpenAI 格式)
+  global g_GroqApiKey, g_GroqModel, g_GroqEndpoint
+  json := '{"model":"' . g_GroqModel . '","messages":[{"role":"system","content":"' . sysPrompt . '"},{"role":"user","content":"' . prompt . '"}],"temperature":0,"max_tokens":800,"stream":true}'
 
   try {
     FileAppend(json, jsonFile, "UTF-8-RAW")
@@ -699,9 +702,9 @@ StartWordOllamaRequest(word, context, isNavigating := false)
     return
   }
 
-  ; 弃用耗时的 PowerShell，改用 Windows 内置极速 curl.exe，彻底消除冷启动延迟
+  ; 使用 curl.exe 调用 Groq API
   try {
-    curlCmd := 'curl.exe -s -N -X POST "http://localhost:11434/api/generate" -H "Content-Type: application/json" -d "@' . jsonFile . '" -o "' . g_WL_StreamFile . '"'
+    curlCmd := 'curl.exe -s -N -X POST "' . g_GroqEndpoint . '" -H "Content-Type: application/json" -H "Authorization: Bearer ' . g_GroqApiKey . '" -d "@' . jsonFile . '" -o "' . g_WL_StreamFile . '"'
     Run(curlCmd, , "Hide", &outPid)
     g_WL_StreamPid := outPid
   } catch {
@@ -780,14 +783,27 @@ WL_ReadStreamContent(filePath)
     return ""
   }
 
-  ; 解析流式 JSON
+  ; 解析 OpenAI SSE 流式 JSON
   result := ""
   Loop Parse, content, "`n", "`r"
   {
     line := Trim(A_LoopField)
     if (line = "")
       continue
-    if RegExMatch(line, '"response":"((?:[^"\\]|\\.)*)"', &m) {
+    
+    ; OpenAI SSE 格式: 每行以 "data: " 开头
+    if (SubStr(line, 1, 6) = "data: ") {
+      line := SubStr(line, 7)
+    }
+    
+    ; 跳过 [DONE] 标记
+    if (line = "[DONE]")
+      continue
+    
+    if (!InStr(line, "{"))
+      continue
+    
+    if RegExMatch(line, '"content"\s*:\s*"((?:[^"\\]|\\.)*)"', &m) {
       token := m[1]
       token := StrReplace(token, "\n", "`n")
       token := StrReplace(token, "\r", "`r")
@@ -798,15 +814,9 @@ WL_ReadStreamContent(filePath)
     }
   }
 
-  ; 清理 think 标签
-  result := RegExReplace(result, "s)<think>.*?</think>", "")
-  result := StrReplace(result, "<think>", "")
-  result := StrReplace(result, "</think>", "")
-  result := StrReplace(result, "/think", "")
-  result := StrReplace(result, "/no_think", "")
   result := Trim(result)
 
-  return result
+  return StripEmoji(result)
 }
 
 ; ===== 关闭浮窗 =====

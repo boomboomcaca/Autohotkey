@@ -352,6 +352,7 @@ StartChatAsync(question)
 {
   global g_StreamFileChat, g_StreamPidChat, g_StreamContentChat, g_ChatPending
   global g_SelectedPrompt, g_HttpChat
+  global g_GroqApiKey, g_GroqModel, g_GroqEndpoint
   
   ; 终止之前正在运行的 Chat 请求
   if (g_StreamPidChat > 0) {
@@ -389,30 +390,17 @@ StartChatAsync(question)
   ; 系统提示：强制禁用 Markdown 和符号
   sysPrompt := "纯文本输出，不要用任何符号（如反斜杠、星号、井号）包裹或强调单词。"
   
-  ; 设置临时文件
-  g_StreamFileChat := A_Temp . "\ollama_stream_chat.txt"
   g_StreamContentChat := ""
-  jsonFile := A_Temp . "\ollama_request_chat.json"
   
-  ; 删除旧文件
-  try FileDelete(g_StreamFileChat)
-  try FileDelete(jsonFile)
-  
-  ; 构建 JSON (使用流式，添加 system 参数)
-  json := '{"model":"huihui_ai/qwen3-abliterated:8b-v2","system":"' . sysPrompt . '","prompt":"' . prompt . '","stream":true,"options":{"temperature":0.7,"num_predict":2048,"think":true}}'
-  
-  ; 将 JSON 写入临时文件
-  try {
-    FileAppend(json, jsonFile, "UTF-8-RAW")
-  } catch {
-    return
-  }
+  ; 构建 JSON (使用流式，OpenAI 格式)
+  json := '{"model":"' . g_GroqModel . '","messages":[{"role":"system","content":"' . sysPrompt . '"},{"role":"user","content":"' . prompt . '"}],"temperature":0.7,"max_tokens":2048,"stream":true}'
   
   try {
     ; 使用 Msxml2.XMLHTTP 启动异步流式请求
     http := ComObject("Msxml2.XMLHTTP")
-    http.Open("POST", "http://localhost:11434/api/generate", true)
+    http.Open("POST", g_GroqEndpoint, true)
     http.SetRequestHeader("Content-Type", "application/json; charset=utf-8")
+    http.SetRequestHeader("Authorization", "Bearer " . g_GroqApiKey)
     http.Send(json)
     g_HttpChat := http ; 记录对象用于轮询
     g_ChatPending := true
@@ -664,10 +652,30 @@ ParseStreamData(rawContent, &accumulatedContent)
   Loop Parse, rawContent, "`n", "`r"
   {
     line := Trim(A_LoopField)
-    if (line = "" || !InStr(line, "{"))
+    if (line = "")
+      continue
+    
+    ; OpenAI SSE 格式: 每行以 "data: " 开头
+    if (SubStr(line, 1, 6) = "data: ") {
+      line := SubStr(line, 7)
+    }
+    
+    ; 跳过 [DONE] 标记
+    if (line = "[DONE]")
+      continue
+    
+    if (!InStr(line, "{"))
       continue
     
     ; 增加对错误的检测
+    if RegExMatch(line, '"error"\s*:\s*\{[^}]*"message"\s*:\s*"((?:[^"\\]|\\.)*)"', &m) {
+      errorMsg := m[1]
+      errorMsg := StrReplace(errorMsg, "\n", "`n")
+      errorMsg := StrReplace(errorMsg, '\"', '"')
+      return "错误: " . errorMsg
+    }
+    
+    ; 也检测简单的 error 字符串格式
     if RegExMatch(line, '"error"\s*:\s*"((?:[^"\\]|\\.)*)"', &m) {
       errorMsg := m[1]
       errorMsg := StrReplace(errorMsg, "\n", "`n")
@@ -675,8 +683,8 @@ ParseStreamData(rawContent, &accumulatedContent)
       return "错误: " . errorMsg
     }
     
-    ; 简单的 JSON 提取，支持冒号前后的空格
-    if RegExMatch(line, '"response"\s*:\s*"((?:[^"\\]|\\.)*)"', &m) {
+    ; OpenAI 格式: 提取 choices[0].delta.content 或 choices[0].message.content
+    if RegExMatch(line, '"content"\s*:\s*"((?:[^"\\]|\\.)*)"', &m) {
       token := m[1]
       ; 基础转义还原
       token := StrReplace(token, "\n", "`n")
@@ -688,19 +696,29 @@ ParseStreamData(rawContent, &accumulatedContent)
     }
   }
   
-  ; 处理并清理 think 标签
-  result := RegExReplace(result, "s)<think>.*?</think>", "")
-  result := StrReplace(result, "<think>")
-  result := StrReplace(result, "</think>")
-  result := StrReplace(result, "/think")
-  result := StrReplace(result, "/no_think")
-  
   if (result != "")
-    accumulatedContent := result
+    accumulatedContent := StripEmoji(result)
   
   return accumulatedContent
 }
 
+; ===== 过滤 Emoji 和不可渲染的 Unicode 字符 =====
+StripEmoji(text)
+{
+  ; 移除零宽字符、变体选择符、对象替换字符、装饰符号
+  text := RegExReplace(text, "[\x{200B}-\x{200F}\x{200D}\x{2060}-\x{206F}\x{FEFF}\x{FFFC}\x{FFFD}\x{FE00}-\x{FE0F}\x{2600}-\x{27BF}\x{2B50}-\x{2B55}]", "")
+  ; 移除补充平面字符（Emoji 等）：过滤 UTF-16 代理对
+  result := ""
+  Loop Parse, text {
+    cp := Ord(A_LoopField)
+    if (cp >= 0xD800 && cp <= 0xDFFF)
+      continue
+    result .= A_LoopField
+  }
+  return result
+}
+
 ; 保留旧函数名作为兼容性代理，但逻辑改为 ParseStreamData
-IsStreamComplete(filePath) => FileExist(filePath) && InStr(FileRead(filePath), '"done":true')
+IsStreamComplete(filePath) => FileExist(filePath) && InStr(FileRead(filePath), '"done"')
 ReadStreamFile(filePath, &accumulatedContent) => ParseStreamData(FileRead(filePath), &accumulatedContent)
+

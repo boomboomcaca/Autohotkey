@@ -56,8 +56,14 @@ g_PromptManageBtn := ""
 ; 初始化 Prompt 模板
 InitPrompts()
 
+g_GroqApiKey := IniRead(A_ScriptDir . "\ollama_config.ini", "Settings", "GroqApiKey", "")
+g_GroqModel := IniRead(A_ScriptDir . "\ollama_config.ini", "Settings", "GroqModel", "llama-3.3-70b-versatile")
+g_GroqEndpoint := IniRead(A_ScriptDir . "\ollama_config.ini", "Settings", "GroqEndpoint", "https://api.groq.com/openai/v1/chat/completions")
+
 OllamaCall(prompt)
 {
+  global g_GroqApiKey, g_GroqModel, g_GroqEndpoint
+  
   ; 构建 JSON
   prompt := StrReplace(prompt, "\", "\\")
   prompt := StrReplace(prompt, "`"", "\`"")
@@ -68,20 +74,22 @@ OllamaCall(prompt)
   ; 系统提示：强制禁用 Markdown 和符号
   sysPrompt := "纯文本输出，不要用任何符号（如反斜杠、星号、井号）包裹或强调单词。"
   
-  json := "{`"model`":`"huihui_ai/qwen3-abliterated:8b-v2`",`"system`":`"" . sysPrompt . "`",`"prompt`":`"" . prompt . "`",`"stream`":false,`"options`":{`"temperature`":0,`"num_predict`":1024,`"think`":true}}"
+  json := '{"model":"' . g_GroqModel . '","messages":[{"role":"system","content":"' . sysPrompt . '"},{"role":"user","content":"' . prompt . '"}],"temperature":0,"max_tokens":1024,"stream":false}'
   
   try {
     http := ComObject("WinHttp.WinHttpRequest.5.1")
-    http.Open("POST", "http://localhost:11434/api/generate", false)
+    http.Open("POST", g_GroqEndpoint, false)
     http.SetRequestHeader("Content-Type", "application/json; charset=utf-8")
+    http.SetRequestHeader("Authorization", "Bearer " . g_GroqApiKey)
     http.Send(json)
     http.WaitForResponse()
     
     response := http.ResponseText
-    if RegExMatch(response, "`"response`"\s*:\s*`"(.*?)`"(?=\s*,\s*`")", &m)
+    ; Groq 返回 OpenAI 格式: {"choices":[{"message":{"content":"..."}}]}
+    if RegExMatch(response, '"content"\s*:\s*"((?:[^"\\]|\\.)*)"', &m)
       result := m[1]
     else
-      return "解析失败"
+      return "解析失败: " . SubStr(response, 1, 200)
     
     result := StrReplace(result, "\n", "`n")
     result := StrReplace(result, "\r", "`r")
@@ -89,12 +97,8 @@ OllamaCall(prompt)
     result := StrReplace(result, "\`"", "`"")
     result := StrReplace(result, "\\", "\")
     
-    result := RegExReplace(result, "s)<think>.*?</think>", "")
-    result := StrReplace(result, "/think")
-    result := StrReplace(result, "/no_think")
-    
     result := Trim(result)
-    return result
+    return StripEmoji(result)
   } Catch Error as e {
     return "请求失败: " . e.Message
   }
@@ -134,6 +138,7 @@ ShowMainGui(original)
     g_MainGui := ""
   }
   
+  original := StripEmoji(original)
   g_OriginalText := original
   g_TranslateResult := ""
   g_CorrectResult := ""
@@ -307,6 +312,8 @@ StartAsyncRequests(text, requestType := "default")
 
 StartAsyncHttp(prompt, requestType)
 {
+  global g_GroqApiKey, g_GroqModel, g_GroqEndpoint
+  
   ; 系统提示：强制禁用 Markdown 和符号
   sysPrompt := "纯文本输出，不要用任何符号（如反斜杠、星号、井号）包裹或强调单词。"
   
@@ -317,14 +324,15 @@ StartAsyncHttp(prompt, requestType)
   prompt := StrReplace(prompt, "`r", "\r")
   prompt := StrReplace(prompt, "`t", "\t")
   
-  ; 构建 JSON (使用流式)
-  json := '{"model":"huihui_ai/qwen3-abliterated:8b-v2","system":"' . sysPrompt . '","prompt":"' . prompt . '","stream":true,"options":{"temperature":0,"num_predict":1024,"think":true}}'
+  ; 构建 JSON (使用流式，OpenAI 格式)
+  json := '{"model":"' . g_GroqModel . '","messages":[{"role":"system","content":"' . sysPrompt . '"},{"role":"user","content":"' . prompt . '"}],"temperature":0,"max_tokens":1024,"stream":true}'
   
   try {
     ; 使用 Msxml2.XMLHTTP 支持在接收过程中读取数据 (readyState=3)
     http := ComObject("Msxml2.XMLHTTP")
-    http.Open("POST", "http://localhost:11434/api/generate", true)
+    http.Open("POST", g_GroqEndpoint, true)
     http.SetRequestHeader("Content-Type", "application/json; charset=utf-8")
+    http.SetRequestHeader("Authorization", "Bearer " . g_GroqApiKey)
     http.Send(json)
     return http
   } catch Error as e {
