@@ -333,7 +333,7 @@ ShowWordPopup(word, context, posX, posY)
 
   ; 语境行（可编辑）
   g_WL_Gui.SetFont("s10 c444444 Norm", "Microsoft YaHei")
-  g_WL_ContextEdit := g_WL_Gui.AddEdit("xs w320 -E0x200", (context != "" && context != word) ? context : "")
+  g_WL_ContextEdit := g_WL_Gui.AddEdit("xs w320 h50 Multi -E0x200", (context != "" && context != word) ? context : "")
   g_OrigEditCtrl := g_WL_ContextEdit ; 兼容 ollama_prompt_chat.ahk
 
   ; 分隔线
