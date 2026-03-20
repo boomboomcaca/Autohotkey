@@ -22,6 +22,7 @@ g_WL_QuestionLabel := ""
 g_WL_AnswerLabel := ""
 g_WL_PromptLabel := ""
 g_WL_BottomHint := ""
+g_WL_AnkiBtn := "" ; 新增 Anki 按钮全局变量
 g_WL_StreamFile := ""
 g_WL_StreamPid := 0
 g_WL_Pending := false
@@ -321,15 +322,20 @@ ShowWordPopup(word, context, posX, posY)
   g_WL_Gui.SetFont("s14 c1a1a2e Bold", "Microsoft YaHei")
   
   ; 单词可编辑输入框 + 中英切换按钮
-  g_WL_WordEdit := g_WL_Gui.AddEdit("w275 Section -E0x200", word)
+  g_WL_WordEdit := g_WL_Gui.AddEdit("w225 Section -E0x200", word)
   
   g_WL_Gui.SetFont("s9 c333333 Norm", "Microsoft YaHei")
   g_WL_LangBtn := g_WL_Gui.AddButton("x+5 ys w40 h26", g_WL_LangMode = "EN" ? "EN" : "中")
+  g_WL_AnkiBtn := g_WL_Gui.AddButton("x+5 ys w60 h26", "➕ Anki")
   
   ; 关联事件
   if (g_WL_LangBtn) {
     g_WL_LangBtn.OnEvent("Click", (*) => WL_ToggleLang())
   }
+  if (g_WL_AnkiBtn) {
+    g_WL_AnkiBtn.OnEvent("Click", (*) => WL_SendToAnki())
+  }
+
 
   ; 语境行（可编辑）
   g_WL_Gui.SetFont("s10 c444444 Norm", "Microsoft YaHei")
@@ -427,6 +433,7 @@ ShowWordPopup(word, context, posX, posY)
   Hotkey("^Tab", Gui_ToggleSelect, "On")
   Hotkey("^v", Gui_PasteAsText, "On")
   Hotkey("^Backspace", Gui_DeleteWord, "On")
+  Hotkey("^s", (*) => WL_SendToAnki(), "On") ; 新增 Ctrl+S 快捷键发送至 Anki
   HotIfWinActive()
 
   ; 启动鼠标移出关闭的检测定时器
@@ -849,6 +856,7 @@ CloseWordGui()
     g_SendBtnCtrl := ""
     g_PromptDropdown := ""
     g_MainGui := ""
+    g_WL_AnkiBtn := ""
   }
 }
 
@@ -1004,4 +1012,103 @@ WL_NavHistory(dir)
   MouseGetPos(&g_WL_InitMouseX, &g_WL_InitMouseY)
   g_WL_MouseMoved := false
   g_WL_ShowTick := A_TickCount
+}
+
+; ===== 发送至 Anki 的核心通信模块 =====
+WL_SendToAnki(*)
+{
+    global g_WL_WordEdit, g_WL_ContextEdit, g_WL_ResultCtrl
+    global g_WL_TtsFile, g_WL_AnkiBtn
+
+    if (!g_WL_WordEdit || !g_WL_ResultCtrl)
+        return
+
+    word := Trim(g_WL_WordEdit.Value)
+    context := Trim(g_WL_ContextEdit.Value)
+    explanation := Trim(g_WL_ResultCtrl.Value)
+
+    if (word = "" || explanation = "" || InStr(explanation, "Querying") || InStr(explanation, "正在查询")) {
+        ToolTip("⚠️ 单词或释义为空/未完成，无法添加到 Anki")
+        SetTimer(ToolTip, -2000)
+        return
+    }
+
+    ; 从配置文件动态读取 Anki 卡片类型映射关系
+    deckName := "英语生词"
+    try deckName := IniRead(A_ScriptDir . "\ollama_config.ini", "Anki", "DeckName")
+    
+    modelName := "问答题"
+    try modelName := IniRead(A_ScriptDir . "\ollama_config.ini", "Anki", "ModelName")
+    
+    frontField := "正面"
+    try frontField := IniRead(A_ScriptDir . "\ollama_config.ini", "Anki", "FrontField")
+    
+    backField := "背面"
+    try backField := IniRead(A_ScriptDir . "\ollama_config.ini", "Anki", "BackField")
+    
+    ; 兜底防乱码：如果从配置文件读出来的是乱码（含有非预期字符），强制重置为正确的默认值
+    if (InStr(modelName, "闁") || InStr(modelName, "瓟") || InStr(modelName, "ue1be") || InStr(modelName, "u95c2")) {
+        deckName := "英语生词"
+        modelName := "问答题"
+        frontField := "正面"
+        backField := "背面"
+    }
+
+    ; 格式化卡片文本
+    frontText := "<h2>" . word . "</h2>"
+    if (context != "" && context != word)
+        frontText .= "<br><br><span style='color:grey;'>" . StrReplace(context, "`n", "<br>") . "</span>"
+    
+    backText := StrReplace(explanation, "`n", "<br>")
+
+    ; 文本转 JSON 安全字符串闭包
+    EscapeJSON := (str) => StrReplace(StrReplace(StrReplace(StrReplace(str, "\", "\\"), "`n", "\n"), "`r", ""), "`"", "\`"")
+
+    frontJson := EscapeJSON(frontText)
+    backJson := EscapeJSON(backText)
+
+    ; 处理音频：如果高保真 TTS 缓存存在，将文件绝对路径一并打包发给 Anki 进行云端同步
+    audioJson := ""
+    if (g_WL_TtsFile != "" && FileExist(g_WL_TtsFile)) {
+        absPath := StrReplace(g_WL_TtsFile, "\", "\\")
+        audioJson := ',"audio": [{"path": "' . absPath . '", "filename": "ahk_tts_' . word . '.mp3", "fields": ["' . frontField . '"]}]'
+    }
+
+    ; 构建 JSON 报文
+    payload := '{"action": "addNote", "version": 6, "params": {"note": {"deckName": "' . deckName . '", "modelName": "' . modelName . '", "fields": {"' . frontField . '": "' . frontJson . '", "' . backField . '": "' . backJson . '"}, "options": {"allowDuplicate": false}, "tags": ["AHK抓取"]' . audioJson . '}}}'
+
+    try {
+        http := ComObject("WinHttp.WinHttpRequest.5.1")
+        
+        ; 第一步：强制确保牌组存在，如果不存在则自动创建，这样就不会再报错 deck not found
+        deckPayload := '{"action": "createDeck", "version": 6, "params": {"deck": "' . deckName . '"}}'
+        http.Open("POST", "http://127.0.0.1:8765", false)
+        http.SetRequestHeader("Content-Type", "application/json; charset=utf-8")
+        http.Send(deckPayload)
+        http.WaitForResponse()
+
+        ; 第二步：发送真正的卡片数据
+        http.Open("POST", "http://127.0.0.1:8765", false)
+        http.SetRequestHeader("Content-Type", "application/json; charset=utf-8")
+        http.Send(payload)
+        http.WaitForResponse()
+        res := http.ResponseText
+        
+        if (InStr(res, '"error": null')) {
+            if (g_WL_AnkiBtn) {
+                origText := g_WL_AnkiBtn.Text
+                g_WL_AnkiBtn.Text := "✓ 成功"
+                SetTimer(() => (g_WL_AnkiBtn ? g_WL_AnkiBtn.Text := origText : ""), -2000)
+            }
+        } else if (InStr(res, "cannot create note because it is a duplicate")) {
+            ToolTip("💡 Anki 中已存在该单词")
+            SetTimer(ToolTip, -2000)
+        } else {
+            ToolTip("❌ Anki 数据格式错误，请检查牌组字段名!`n" . res)
+            SetTimer(ToolTip, -4000)
+        }
+    } catch Error as e {
+        ToolTip("❌ 无法连接到 Anki，请确保：`n1. Anki 客户端已启动`n2. 已安装 AnkiConnect 插件")
+        SetTimer(ToolTip, -5000)
+    }
 }
