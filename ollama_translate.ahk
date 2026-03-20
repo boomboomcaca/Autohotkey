@@ -49,9 +49,7 @@ g_SelectedPrompt := ""
 g_PromptDropdown := ""
 g_PromptManageBtn := ""
 
-; 引入拆分模块
-#Include "ollama_tts.ahk"
-#Include "ollama_prompt_chat.ahk"
+; 共享模块已在入口处引入（emacs.ahk）
 
 ; 初始化 Prompt 模板
 InitPrompts()

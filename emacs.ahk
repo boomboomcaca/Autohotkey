@@ -629,6 +629,10 @@ global ; V1toV2: Made function global
 return
 } ; V1toV2: Added closing brace for [^!down]
 
+; 共享模块（只引入一次）
+#Include "ollama_tts.ahk"
+#Include "ollama_prompt_chat.ahk"
+
 ; 引入 Ollama 翻译/纠错模块
 #Include "ollama_translate.ahk"
 

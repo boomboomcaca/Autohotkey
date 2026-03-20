@@ -4,8 +4,7 @@
 
 #Include "UIA.ahk"
 #Include "OCR.ahk"
-#Include "ollama_tts.ahk"
-#Include "ollama_prompt_chat.ahk"
+; 共享模块已在入口处引入（emacs.ahk）
 
 ; ===== 全局变量 =====
 g_WL_Gui := ""
