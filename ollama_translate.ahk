@@ -166,7 +166,9 @@ ShowMainGui(original)
   ; 英文模式显示朗读图标
   if !g_IsChineseMode {
     g_MainGui.AddText("w120 Section", "原文 (可编辑):")
-    g_TtsOrigCtrl := g_MainGui.AddText("x+5 ys cGray", "🔊")
+    g_MainGui.SetFont("s16")
+    g_TtsOrigCtrl := g_MainGui.AddText("x+5 ys-6 cGray", "🔊")
+    g_MainGui.SetFont("s10")
     g_TtsOrigCtrl.OnEvent("Click", Gui_PlayOriginal)
     g_OrigEditCtrl := g_MainGui.AddEdit("xm w500 h60", original)
   } else {
@@ -177,7 +179,9 @@ ShowMainGui(original)
   if g_IsChineseMode {
     ; 中文：翻译在前，添加朗读图标
     g_TranslateLabelCtrl := g_MainGui.AddText("w120 Section", "✓ " . translateLabel)
-    g_TtsTranslateCtrl := g_MainGui.AddText("x+5 ys cGray", "🔊")
+    g_MainGui.SetFont("s16")
+    g_TtsTranslateCtrl := g_MainGui.AddText("x+5 ys-6 cGray", "🔊")
+    g_MainGui.SetFont("s10")
     g_TtsTranslateCtrl.OnEvent("Click", Gui_PlayTranslate)
     g_TranslateEditCtrl := g_MainGui.AddEdit("xm w500 h120 ReadOnly", "正在处理...")
     g_CorrectLabelCtrl := g_MainGui.AddText("w500", "   " . correctLabel)
@@ -186,14 +190,18 @@ ShowMainGui(original)
   } else {
     ; 英文：纠错在前，添加朗读图标
     g_CorrectLabelCtrl := g_MainGui.AddText("w120 Section", "✓ " . correctLabel)
-    g_TtsCorrectCtrl := g_MainGui.AddText("x+5 ys cGray", "🔊")
+    g_MainGui.SetFont("s16")
+    g_TtsCorrectCtrl := g_MainGui.AddText("x+5 ys-6 cGray", "🔊")
+    g_MainGui.SetFont("s10")
     g_TtsCorrectCtrl.OnEvent("Click", Gui_PlayCorrect)
     g_CorrectEditCtrl := g_MainGui.AddEdit("xm w500 h60 ReadOnly", "正在处理...")
     ; 错误解释框
     g_MainGui.AddText("w500", "错误解释:")
     g_ExplainEditCtrl := g_MainGui.AddEdit("w500 h100 ReadOnly", "正在处理...")
     g_TranslateLabelCtrl := g_MainGui.AddText("w120 Section", "   " . translateLabel)
-    g_TtsTranslateCtrl := g_MainGui.AddText("x+5 ys cGray", "🔊")
+    g_MainGui.SetFont("s16")
+    g_TtsTranslateCtrl := g_MainGui.AddText("x+5 ys-6 cGray", "🔊")
+    g_MainGui.SetFont("s10")
     g_TtsTranslateCtrl.OnEvent("Click", Gui_PlayTranslate)
     g_TranslateEditCtrl := g_MainGui.AddEdit("xm w500 h40 ReadOnly", "正在处理...")
     g_SelectedResult := "correct"
@@ -213,7 +221,9 @@ ShowMainGui(original)
   g_PromptManageBtn.OnEvent("Click", Gui_ManagePrompts)
   
   g_MainGui.AddText("xs w40 Section", "问题:")
-  g_TtsQuestionCtrl := g_MainGui.AddText("x+5 ys cGray", "🔊")
+  g_MainGui.SetFont("s16")
+  g_TtsQuestionCtrl := g_MainGui.AddText("x+5 ys-6 cGray", "🔊")
+  g_MainGui.SetFont("s10")
   g_TtsQuestionCtrl.OnEvent("Click", Gui_PlayQuestion)
   g_QuestionEditCtrl := g_MainGui.AddEdit("xs w330 h50", original)
   g_SendBtnCtrl := g_MainGui.AddButton("x+5 yp h50 w60", "发送")

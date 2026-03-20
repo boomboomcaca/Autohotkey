@@ -364,7 +364,9 @@ ShowWordPopup(word, context, posX, posY)
 
   g_WL_Gui.SetFont("s9 c333333", "Microsoft YaHei")
   g_WL_QuestionLabel := g_WL_Gui.AddText("xs Section", g_WL_LangMode = "EN" ? "Question:" : "问题:")
-  g_TtsQuestionCtrl := g_WL_Gui.AddText("x+5 ys cGray", "🔊")
+  g_WL_Gui.SetFont("s16") ; 放大图标
+  g_TtsQuestionCtrl := g_WL_Gui.AddText("x+5 ys-6 cGray", "🔊")
+  g_WL_Gui.SetFont("s9")  ; 恢复字体
   g_TtsQuestionCtrl.OnEvent("Click", Gui_PlayQuestion)
   
   g_QuestionEditCtrl := g_WL_Gui.AddEdit("xs w255 h50 -E0x200", word)
