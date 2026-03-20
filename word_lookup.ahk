@@ -1095,20 +1095,27 @@ WL_SendToAnki(*)
         res := http.ResponseText
         
         if (InStr(res, '"error": null')) {
+            ToolTip("⭐ 已成功添加到 Anki！")
+            SetTimer(ToolTip, -2000)
             if (g_WL_AnkiBtn) {
                 origText := g_WL_AnkiBtn.Text
                 g_WL_AnkiBtn.Text := "✓ 成功"
                 SetTimer(() => (g_WL_AnkiBtn ? g_WL_AnkiBtn.Text := origText : ""), -2000)
             }
         } else if (InStr(res, "cannot create note because it is a duplicate")) {
-            ToolTip("💡 Anki 中已存在该单词")
+            ToolTip("💡 Anki 中已存在该单词，无需重复添加")
             SetTimer(ToolTip, -2000)
+            if (g_WL_AnkiBtn) {
+                origText := g_WL_AnkiBtn.Text
+                g_WL_AnkiBtn.Text := "× 重复"
+                SetTimer(() => (g_WL_AnkiBtn ? g_WL_AnkiBtn.Text := origText : ""), -2000)
+            }
         } else {
-            ToolTip("❌ Anki 数据格式错误，请检查牌组字段名!`n" . res)
-            SetTimer(ToolTip, -4000)
+            ToolTip("❌ Anki 数据格式错误（字段名不匹配）!`n" . res)
+            SetTimer(ToolTip, -3000)
         }
     } catch Error as e {
-        ToolTip("❌ 无法连接到 Anki，请确保：`n1. Anki 客户端已启动`n2. 已安装 AnkiConnect 插件")
-        SetTimer(ToolTip, -5000)
+        ToolTip("❌ 无法连接到 Anki`n请确保 Anki 客户端已启动且安装了 AnkiConnect 插件")
+        SetTimer(ToolTip, -3000)
     }
 }
