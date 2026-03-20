@@ -72,13 +72,17 @@ PlayTtsText(text)
   escapedText := StrReplace(escapedText, '`r', '')
 
   try {
-    ; 同步生成音频
-    RunWait('edge-tts --voice ' . voice . ' --text "' . escapedText . '" --write-media "' . tempFile . '"', , "Hide")
+    ; 使用 Run 代替 RunWait 以捕获 PID 并允许在生成过程中被 StopTts 强行终止
+    Run('edge-tts --voice ' . voice . ' --text "' . escapedText . '" --write-media "' . tempFile . '"', , "Hide", &outPid)
+    g_TtsProcPid := outPid
     
-    if FileExist(tempFile)
+    ; 等待音频生成完成
+    ProcessWaitClose(outPid)
+    
+    if (FileExist(tempFile) && !InStr(text, "正在") && !InStr(text, "切换后"))
       SoundPlay(tempFile)
   } catch Error as e {
-    ; 静默失败或提示
+    ; 静默失败
   }
 }
 
@@ -89,34 +93,45 @@ CheckTtsHover()
   global g_PrevForegroundHwnd
   static lastHoverCtrl := ""
 
-  if (g_MainGui = "") {
+  ; 安全检查：确保主窗口对象存在且有效
+  if (!g_MainGui || !IsObject(g_MainGui)) {
     SetTimer(CheckTtsHover, 0)
     return
   }
 
   try {
-    fgHwnd := WinGetID("A")
-    if (fgHwnd != g_MainGui.Hwnd)
+    ; 记录进入弹窗前的窗口句柄，用于朗读后恢复焦点（如果需要）
+    fgHwnd := WinActive("A")
+    if (fgHwnd && fgHwnd != g_MainGui.Hwnd)
       g_PrevForegroundHwnd := fgHwnd
+  } catch {
   }
 
   currentHover := ""
   try {
+    ; 获取鼠标下的控件 HWND
     MouseGetPos(&mx, &my, &winUnder, &ctrlUnder, 2)
-    if (ctrlUnder = g_TtsOrigCtrl.Hwnd)
-      currentHover := "orig"
-    else if (ctrlUnder = g_TtsCorrectCtrl.Hwnd)
-      currentHover := "correct"
-    else if (ctrlUnder = g_TtsTranslateCtrl.Hwnd)
-      currentHover := "translate"
-    else if (g_TtsQuestionCtrl != "" && ctrlUnder = g_TtsQuestionCtrl.Hwnd)
-      currentHover := "question"
-  } 
+    
+    ; 只有当控件变量是有效的 GUI 控件对象时，才允许访问 .Hwnd
+    if (ctrlUnder) {
+        if (g_TtsOrigCtrl && IsObject(g_TtsOrigCtrl) && ctrlUnder = g_TtsOrigCtrl.Hwnd)
+          currentHover := "orig"
+        else if (g_TtsCorrectCtrl && IsObject(g_TtsCorrectCtrl) && ctrlUnder = g_TtsCorrectCtrl.Hwnd)
+          currentHover := "correct"
+        else if (g_TtsTranslateCtrl && IsObject(g_TtsTranslateCtrl) && ctrlUnder = g_TtsTranslateCtrl.Hwnd)
+          currentHover := "translate"
+        else if (g_TtsQuestionCtrl && IsObject(g_TtsQuestionCtrl) && ctrlUnder = g_TtsQuestionCtrl.Hwnd)
+          currentHover := "question"
+    }
+  } catch {
+    ; 忽略鼠标位置探测中的偶发错误
+  }
 
   if (currentHover != "" && currentHover != lastHoverCtrl) {
     g_TtsPlaying := true
     g_HoverTarget := currentHover
-    PlayTtsLoop()
+    ; 异步启动播放循环，避免阻塞检测
+    SetTimer(PlayTtsLoop, -10)
   } else if (currentHover = "" && lastHoverCtrl != "") {
     StopTts()
   }
@@ -141,10 +156,13 @@ PlayTtsLoop()
 {
   global g_TtsPlaying, g_HoverTarget, g_TtsProcPid
   global g_OrigEditCtrl, g_CorrectEditCtrl, g_TranslateEditCtrl, g_QuestionEditCtrl
+  static lastText := ""  ; 用于缓存上一次处理的文字
   static tempFile := A_Temp . "\ahk_tts_hover.mp3"
 
-  if (!g_TtsPlaying || g_HoverTarget = "")
+  if (!g_TtsPlaying || g_HoverTarget = "") {
+    lastText := "" ; 清空缓存，下次进入重新生成
     return
+  }
 
   if (g_HoverTarget = "orig")
     text := Trim(g_OrigEditCtrl.Value)
@@ -164,18 +182,24 @@ PlayTtsLoop()
   voice := isChinese ? "zh-CN-XiaoxiaoNeural" : "en-US-AriaNeural"
   
   try {
-    escapedText := StrReplace(text, '"', '\"')
-    escapedText := StrReplace(escapedText, '`n', ' ')
-    
-    ; 生成音频
-    RunWait('edge-tts --voice ' . voice . ' --text "' . escapedText . '" --write-media "' . tempFile . '"', , "Hide")
+    ; 核心优化：如果文字没变且文件存在，则不重新生成
+    if (text != lastText || !FileExist(tempFile)) {
+        escapedText := StrReplace(text, '"', '\"')
+        escapedText := StrReplace(escapedText, '`n', ' ')
+        
+        ; 生成音频
+        Run('edge-tts --voice ' . voice . ' --text "' . escapedText . '" --write-media "' . tempFile . '"', , "Hide", &outPid)
+        g_TtsProcPid := outPid
+        ProcessWaitClose(outPid)
+        lastText := text
+    }
     
     if (g_TtsPlaying && FileExist(tempFile)) {
       SoundPlay(tempFile, "Wait")
       
       ; 播放完毕后如果还在悬停，循环播放
       if (g_TtsPlaying)
-        SetTimer(PlayTtsLoop, -300)
+        SetTimer(PlayTtsLoop, -300) ; 将间隔从 300ms 缩短到 100ms
     }
   } catch {
   }
