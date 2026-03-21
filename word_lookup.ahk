@@ -329,7 +329,7 @@ ShowWordPopup(word, context, posX, posY)
   g_WL_WordEdit := g_WL_Gui.AddEdit("w225 Section -E0x200", word)
   
   g_WL_Gui.SetFont("s9 c333333 Norm", "Microsoft YaHei")
-  g_WL_LangBtn := g_WL_Gui.AddButton("x+5 ys w35 h26", g_WL_LangMode = "EN" ? "EN" : "中")
+  g_WL_LangBtn := g_WL_Gui.AddText("x+5 ys w35 h26 Center 0x200 Border BackgroundF0F0F0", g_WL_LangMode = "EN" ? "EN" : "中")
   g_WL_Gui.SetFont("s9 c333333 Norm", "Microsoft YaHei")
   g_WL_AnkiBtn := g_WL_Gui.AddText("x+5 ys w50 h26 Center 0x200 Border BackgroundF0F0F0", "➕ Anki")
   g_WL_Gui.SetFont("s9 c333333 Norm", "Microsoft YaHei")
@@ -359,7 +359,7 @@ ShowWordPopup(word, context, posX, posY)
   ; ==========================================================
   ; AI 问答区域 (右侧面板)
   ; ==========================================================
-  g_WL_Gui.SetFont("s9 c666666", "Microsoft YaHei")
+  g_WL_Gui.SetFont("s9 c333333", "Microsoft YaHei")
   g_WL_PromptLabel := g_WL_Gui.AddText("x350 y12 w50 Section", g_WL_LangMode = "EN" ? "Prompt:" : "提示词:")
   
   promptList := ""
@@ -371,7 +371,7 @@ ShowWordPopup(word, context, posX, posY)
     g_PromptDropdown.Text := g_SelectedPrompt
   g_PromptDropdown.OnEvent("Change", Gui_PromptChanged)
   
-  g_PromptManageBtn := g_WL_Gui.AddButton("x+5 yp-2 w58 h24", g_WL_LangMode = "EN" ? "Manage" : "管理")
+  g_PromptManageBtn := g_WL_Gui.AddText("x+5 yp-2 w58 h24 Center 0x200 Border BackgroundF0F0F0", g_WL_LangMode = "EN" ? "Manage" : "管理")
   g_PromptManageBtn.OnEvent("Click", Gui_ManagePrompts)
 
   ; 图钉按钮（紧跟管理按钮，高度对齐）
@@ -388,9 +388,10 @@ ShowWordPopup(word, context, posX, posY)
   g_TtsQuestionCtrl.OnEvent("Click", Gui_PlayQuestion)
   
   g_QuestionEditCtrl := g_WL_Gui.AddEdit("xs w255 h50 -E0x200", word)
-  g_SendBtnCtrl := g_WL_Gui.AddButton("x+5 yp w60 h50", g_WL_LangMode = "EN" ? "Send" : "发送")
+  g_SendBtnCtrl := g_WL_Gui.AddText("x+5 yp w60 h50 Center 0x200 Border BackgroundF0F0F0", g_WL_LangMode = "EN" ? "Send" : "发送")
   g_SendBtnCtrl.OnEvent("Click", Gui_SendQuestion)
 
+  g_WL_Gui.SetFont("s9 c333333", "Microsoft YaHei")
   g_WL_AnswerLabel := g_WL_Gui.AddText("xs", g_WL_LangMode = "EN" ? "Answer:" : "回答:")
   g_AnswerEditCtrl := g_WL_Gui.AddEdit("xs w320 h197 ReadOnly -E0x200", "")
 
