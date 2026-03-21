@@ -1118,9 +1118,9 @@ WL_SendToAnki(*)
                 SetTimer(ToolTip, -3000)
             }
         } else {
-            ; 删除逻辑
+            ; 删除逻辑（仅搜索正面字段，避免释义误匹配）
             escapeWord := StrReplace(StrReplace(word, "\", "\\"), "`"", "\`"")
-            query := 'deck:"' . deckName . '" "' . escapeWord . '"'
+            query := 'deck:"' . deckName . '" ' . frontField . ':re:<h2>' . escapeWord . '</h2>'
             jsonQuery := StrReplace(query, '"', '\"')
             payload := '{"action": "findNotes", "version": 6, "params": {"query": "' . jsonQuery . '"}}'
             
@@ -1158,8 +1158,8 @@ WL_SendToAnki(*)
 }
 
 WL_CheckAnkiStatus(word) {
-    global g_WL_AnkiBtn
-    if (!g_WL_AnkiBtn) {
+    global g_WL_AnkiBtn, g_WL_Gui
+    if (!g_WL_AnkiBtn || !g_WL_Gui) {
         return
     }
         
@@ -1169,8 +1169,11 @@ WL_CheckAnkiStatus(word) {
         deckName := "英语生词"
     }
 
+    frontField := "正面"
+    try frontField := IniRead(A_ScriptDir . "\ollama_config.ini", "Anki", "FrontField")
+
     escapeWord := StrReplace(StrReplace(word, "\", "\\"), "`"", "\`"")
-    query := 'deck:"' . deckName . '" "' . escapeWord . '"'
+    query := 'deck:"' . deckName . '" ' . frontField . ':re:<h2>' . escapeWord . '</h2>'
     jsonQuery := StrReplace(query, '"', '\"')
     payload := '{"action": "findNotes", "version": 6, "params": {"query": "' . jsonQuery . '"}}'
     
@@ -1183,18 +1186,23 @@ WL_CheckAnkiStatus(word) {
         http.WaitForResponse()
         res := http.ResponseText
         
+        ; HTTP 请求期间 GUI 可能已关闭，再次检查
+        if (!g_WL_AnkiBtn || !g_WL_Gui)
+            return
+        
         if (RegExMatch(res, '"result":\s*\[(.*?)\]', &m)) {
             ids := Trim(m[1])
             if (ids != "") {
-                g_WL_AnkiBtn.Text := "➖ Anki"
-                g_WL_AnkiBtn.SetFont("c008800 Norm")
+                try g_WL_AnkiBtn.Text := "➖ Anki"
+                try g_WL_AnkiBtn.SetFont("c008800 Norm")
                 return
             }
         }
     } catch {
-        ; 忽略连接失败
+        ; 忽略连接失败或控件已销毁
+        return
     }
-    g_WL_AnkiBtn.Text := "➕ Anki"
-    g_WL_AnkiBtn.SetFont("c333333 Norm")
+    try g_WL_AnkiBtn.Text := "➕ Anki"
+    try g_WL_AnkiBtn.SetFont("c333333 Norm")
 }
 
