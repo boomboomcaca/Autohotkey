@@ -22,6 +22,8 @@ g_WL_AnswerLabel := ""
 g_WL_PromptLabel := ""
 g_WL_BottomHint := ""
 g_WL_AnkiBtn := "" ; 新增 Anki 按钮全局变量
+g_WL_IsPinned := false
+g_WL_PinBtn := ""
 g_WL_StreamFile := ""
 g_WL_StreamPid := 0
 g_WL_Pending := false
@@ -67,6 +69,9 @@ g_PrevForegroundHwnd := 0
 
 ; 初始化 Prompt 模板
 InitPrompts()
+
+; 注册窗口拖动事件
+OnMessage(0x0201, WL_WM_LBUTTONDOWN)
 
 ; ===== 快捷键 F2 =====
 F2::
@@ -276,7 +281,7 @@ ShowWordPopup(word, context, posX, posY)
   global g_WL_Gui, g_WL_ResultCtrl, g_WL_TitleCtrl, g_WL_WordEdit, g_WL_ContextEdit, WL_CurrentWord, WL_CurrentContext, g_WL_LangMode, g_WL_LangBtn, g_WL_AnkiBtn
   global g_IsChineseMode, g_QuestionEditCtrl, g_AnswerEditCtrl, g_SendBtnCtrl, g_PromptDropdown
   global g_MainGui, g_OrigEditCtrl, g_PromptNames, g_SelectedPrompt, g_PromptManageBtn, g_TtsQuestionCtrl
-  global g_WL_QuestionLabel, g_WL_AnswerLabel, g_WL_PromptLabel, g_WL_BottomHint
+  global g_WL_QuestionLabel, g_WL_AnswerLabel, g_WL_PromptLabel, g_WL_BottomHint, g_WL_IsPinned, g_WL_PinBtn
   word := StripEmoji(word)
   context := StripEmoji(context)
   WL_CurrentWord := word
@@ -320,13 +325,15 @@ ShowWordPopup(word, context, posX, posY)
   ; 标题行水平排列
   g_WL_Gui.SetFont("s14 c1a1a2e Bold", "Microsoft YaHei")
   
-  ; 单词可编辑输入框 + 中英切换按钮
-  g_WL_WordEdit := g_WL_Gui.AddEdit("w225 Section -E0x200", word)
+  ; 单词可编辑输入框 + 中英切换按钮 + Anki + 图钉
+  g_WL_WordEdit := g_WL_Gui.AddEdit("w190 Section -E0x200", word)
   
   g_WL_Gui.SetFont("s9 c333333 Norm", "Microsoft YaHei")
-  g_WL_LangBtn := g_WL_Gui.AddButton("x+5 ys w40 h26", g_WL_LangMode = "EN" ? "EN" : "中")
+  g_WL_LangBtn := g_WL_Gui.AddButton("x+5 ys w35 h26", g_WL_LangMode = "EN" ? "EN" : "中")
   g_WL_Gui.SetFont("s9 c333333 Norm", "Microsoft YaHei")
-  g_WL_AnkiBtn := g_WL_Gui.AddText("x+5 ys w60 h26 Center 0x200 Border BackgroundF0F0F0", "➕ Anki")
+  g_WL_AnkiBtn := g_WL_Gui.AddText("x+5 ys w50 h26 Center 0x200 Border BackgroundF0F0F0", "➕ Anki")
+  g_WL_Gui.SetFont("s9 " . (g_WL_IsPinned ? "cCC0000 Bold" : "c333333 Norm"), "Microsoft YaHei")
+  g_WL_PinBtn := g_WL_Gui.AddText("x+5 ys w26 h26 Center 0x200 Border BackgroundF0F0F0", g_WL_IsPinned ? "📍" : "📌")
   g_WL_Gui.SetFont("s9 c333333 Norm", "Microsoft YaHei")
   
   ; 关联事件
@@ -335,6 +342,9 @@ ShowWordPopup(word, context, posX, posY)
   }
   if (g_WL_AnkiBtn) {
     g_WL_AnkiBtn.OnEvent("Click", (*) => WL_SendToAnki())
+  }
+  if (g_WL_PinBtn) {
+    g_WL_PinBtn.OnEvent("Click", (*) => WL_TogglePin())
   }
 
 
@@ -500,12 +510,15 @@ WL_HandleEsc(*)
 ; ===== 检测点击浮窗外部 =====
 WL_CheckClickOutside()
 {
-  global g_WL_Gui
+  global g_WL_Gui, g_WL_IsPinned
 
   if (g_WL_Gui = "") {
     SetTimer(WL_CheckClickOutside, 0)
     return
   }
+
+  if (g_WL_IsPinned)
+    return
 
   ; 窗口显示后 1000ms 内不检测
   global g_WL_ShowTick
@@ -803,6 +816,26 @@ WL_ReadStreamContent(filePath)
   result := Trim(result)
 
   return StripEmoji(result)
+}
+
+; ===== 切换图钉状态 =====
+WL_TogglePin()
+{
+    global g_WL_IsPinned, g_WL_PinBtn
+    g_WL_IsPinned := !g_WL_IsPinned
+    if (g_WL_PinBtn) {
+        g_WL_PinBtn.Text := g_WL_IsPinned ? "📍" : "📌"
+        g_WL_PinBtn.SetFont("s9 " . (g_WL_IsPinned ? "cCC0000 Bold" : "c333333 Norm"), "Microsoft YaHei")
+    }
+}
+
+; ===== 支持拖动窗口 =====
+WL_WM_LBUTTONDOWN(wParam, lParam, msg, hwnd)
+{
+    global g_WL_Gui
+    if (g_WL_Gui != "" && hwnd == g_WL_Gui.Hwnd) {
+        PostMessage(0xA1, 2, 0, , "ahk_id " . hwnd)
+    }
 }
 
 ; ===== 关闭浮窗 =====
