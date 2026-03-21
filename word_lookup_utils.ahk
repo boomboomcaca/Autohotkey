@@ -1,4 +1,4 @@
-﻿; ===== 切换图钉状态 =====
+; ===== 切换图钉状态 =====
 WL_TogglePin()
 {
     global g_WL_IsPinned, g_WL_PinBtn
@@ -274,8 +274,6 @@ WL_SendToAnki(*)
         
         if (isAdd) {
             if (explanation = "" || InStr(explanation, "Querying") || InStr(explanation, "正在查询")) {
-                ToolTip("⚠️ 单词或释义为空/未完成，无法添加到 Anki")
-                SetTimer(ToolTip, -2000)
                 return
             }
 
@@ -317,18 +315,12 @@ WL_SendToAnki(*)
             res := http.ResponseText
             
             if (InStr(res, '"error": null')) {
-                ToolTip("⭐ 已成功添加到 Anki！")
                 g_WL_AnkiBtn.Text := "➖ Anki"
                 g_WL_AnkiBtn.SetFont("c008800 Norm")
-                SetTimer(ToolTip, -2000)
             } else if (InStr(res, "cannot create note because it is a duplicate")) {
-                ToolTip("💡 Anki 中已存在该单词，无需重复添加")
                 g_WL_AnkiBtn.Text := "➖ Anki"
                 g_WL_AnkiBtn.SetFont("c008800 Norm")
-                SetTimer(ToolTip, -2000)
             } else {
-                ToolTip("❌ Anki 数据格式错误（字段名不匹配）!`n" . res)
-                SetTimer(ToolTip, -3000)
             }
         } else {
             ; 删除逻辑（仅搜索正面字段，避免释义误匹配）
@@ -352,21 +344,15 @@ WL_SendToAnki(*)
                     http.Send(delPayload)
                     http.WaitForResponse()
                     
-                    ToolTip("🗑️ 已从 Anki 移除该单词")
                     g_WL_AnkiBtn.Text := "➕ Anki"
                     g_WL_AnkiBtn.SetFont("c333333 Norm")
-                    SetTimer(ToolTip, -2000)
                     return
                 }
             }
-            ToolTip("⚠️ 未找到对应的 Anki 笔记")
             g_WL_AnkiBtn.Text := "➕ Anki"
             g_WL_AnkiBtn.SetFont("c333333 Norm")
-            SetTimer(ToolTip, -2000)
         }
     } catch Error as e {
-        ToolTip("❌ 无法连接到 Anki`n请确保 Anki 客户端已启动且安装了 AnkiConnect 插件")
-        SetTimer(ToolTip, -3000)
     }
 }
 

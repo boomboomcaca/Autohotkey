@@ -1,4 +1,4 @@
-﻿;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; 鼠标取词 + 语境解释 - Alt+W：截取鼠标所在窗口 → Windows OCR → 定位单词 → Ollama 解释
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -153,7 +153,6 @@ F2::
   ; 【优先级 2】: Windows 10/11 原生 WinRT OCR API - 屏幕极速截取
   ; ==========================================================
   if (!found) {
-    ToolTip("Analyzing Screen...")
     try {
       dpi := 96
       try dpi := DllCall("GetDpiForWindow", "Ptr", winUnder, "UInt")
@@ -169,8 +168,6 @@ F2::
       try {
         ocrResult := OCR.FromRect(winX, winY, captureW, captureH, {Language: "en-US"})
       } catch {
-        ToolTip("Warning: OCR Language Package Missing. Please install English (United States) in Windows Settings.")
-        SetTimer(ToolTip, -5000)
         ocrResult := OCR.FromRect(winX, winY, captureW, captureH)
       }
       
@@ -259,16 +256,11 @@ F2::
         }
       }
     } catch as err {
-      ToolTip("OCR 失败: " err.Message)
-      SetTimer(ToolTip, -2000)
       return
     }
-    ToolTip()
   }
 
   if (!found || word = "") {
-    ToolTip("未识别到单词")
-    SetTimer(ToolTip, -2000)
     return
   }
 
