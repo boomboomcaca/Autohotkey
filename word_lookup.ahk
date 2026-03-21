@@ -325,7 +325,9 @@ ShowWordPopup(word, context, posX, posY)
   
   g_WL_Gui.SetFont("s9 c333333 Norm", "Microsoft YaHei")
   g_WL_LangBtn := g_WL_Gui.AddButton("x+5 ys w40 h26", g_WL_LangMode = "EN" ? "EN" : "中")
-  g_WL_AnkiBtn := g_WL_Gui.AddButton("x+5 ys w60 h26", "➕ Anki")
+  g_WL_Gui.SetFont("s9 c333333 Norm", "Microsoft YaHei")
+  g_WL_AnkiBtn := g_WL_Gui.AddText("x+5 ys w60 h26 Center 0x200 Border BackgroundF0F0F0", "➕ Anki")
+  g_WL_Gui.SetFont("s9 c333333 Norm", "Microsoft YaHei")
   
   ; 关联事件
   if (g_WL_LangBtn) {
@@ -646,7 +648,7 @@ StartWordOllamaRequest(word, context, isNavigating := false)
     if (context != "" && context != word)
       prompt .= " Please explain its meaning in the following context:\nContext: " . context
 
-    prompt .= "\n\nPlease output using the following format (plain text only):\n● Part of Speech: xxx /phonetics/\n● Word Roots: [Break down prefixes, roots, suffixes with origins and meanings]\n● Definition: [Simple English definition]\n● Context Meaning: [Explanation based on the given context]\n● Collocations: [Common collocations or examples]"
+    prompt .= "\n\nPlease output using the following format (plain text only):\n● Part of Speech: xxx /American English IPA/ (phonetics is REQUIRED, always provide American English IPA)\n● Word Roots: [Break down prefixes, roots, suffixes with origins and meanings]\n● Definition: [Simple English definition]\n● Context Meaning: [Explanation based on the given context]\n● Collocations: [Common collocations or examples]"
     
     sysPrompt := "Output ONLY in English. Use plain text without Markdown formatting. Keep explanations concise."
   } else {
@@ -657,7 +659,7 @@ StartWordOllamaRequest(word, context, isNavigating := false)
     else
       prompt .= " 的含义。"
 
-    prompt .= "\n\n请用以下格式输出（纯文本）：\n● 词性：xxx /音标/\n● 词根拆解：拆分前缀、词根、后缀，标注来源和含义\n● 释义：xxx\n● 语境释义：在这个句子中表示...\n● 常见搭配：xxx"
+    prompt .= "\n\n请用以下格式输出（纯文本）：\n● 词性：xxx /美式音标/（音标为必填项，必须给出美式英语 IPA 音标）\n● 词根拆解：拆分前缀、词根、后缀，标注来源和含义\n● 释义：xxx\n● 语境释义：在这个句子中表示...\n● 常见搭配：xxx"
     
     sysPrompt := "纯文本输出，不要用任何符号（如反斜杠、星号、井号）包裹或强调单词。简洁回答。"
   }
@@ -1104,10 +1106,12 @@ WL_SendToAnki(*)
             if (InStr(res, '"error": null')) {
                 ToolTip("⭐ 已成功添加到 Anki！")
                 g_WL_AnkiBtn.Text := "➖ Anki"
+                g_WL_AnkiBtn.SetFont("c008800 Norm")
                 SetTimer(ToolTip, -2000)
             } else if (InStr(res, "cannot create note because it is a duplicate")) {
                 ToolTip("💡 Anki 中已存在该单词，无需重复添加")
                 g_WL_AnkiBtn.Text := "➖ Anki"
+                g_WL_AnkiBtn.SetFont("c008800 Norm")
                 SetTimer(ToolTip, -2000)
             } else {
                 ToolTip("❌ Anki 数据格式错误（字段名不匹配）!`n" . res)
@@ -1137,12 +1141,14 @@ WL_SendToAnki(*)
                     
                     ToolTip("🗑️ 已从 Anki 移除该单词")
                     g_WL_AnkiBtn.Text := "➕ Anki"
+                    g_WL_AnkiBtn.SetFont("c333333 Norm")
                     SetTimer(ToolTip, -2000)
                     return
                 }
             }
             ToolTip("⚠️ 未找到对应的 Anki 笔记")
             g_WL_AnkiBtn.Text := "➕ Anki"
+            g_WL_AnkiBtn.SetFont("c333333 Norm")
             SetTimer(ToolTip, -2000)
         }
     } catch Error as e {
@@ -1181,6 +1187,7 @@ WL_CheckAnkiStatus(word) {
             ids := Trim(m[1])
             if (ids != "") {
                 g_WL_AnkiBtn.Text := "➖ Anki"
+                g_WL_AnkiBtn.SetFont("c008800 Norm")
                 return
             }
         }
@@ -1188,5 +1195,6 @@ WL_CheckAnkiStatus(word) {
         ; 忽略连接失败
     }
     g_WL_AnkiBtn.Text := "➕ Anki"
+    g_WL_AnkiBtn.SetFont("c333333 Norm")
 }
 
