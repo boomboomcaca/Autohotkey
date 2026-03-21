@@ -366,12 +366,12 @@ ShowWordPopup(word, context, posX, posY)
   for name in g_PromptNames {
     promptList .= (promptList = "" ? "" : "|") . name
   }
-  g_PromptDropdown := g_WL_Gui.AddDropDownList("x+2 yp-3 w170", StrSplit(promptList, "|"))
+  g_PromptDropdown := g_WL_Gui.AddDropDownList("x+2 yp-1 w170", StrSplit(promptList, "|"))
   if (g_SelectedPrompt != "")
     g_PromptDropdown.Text := g_SelectedPrompt
   g_PromptDropdown.OnEvent("Change", Gui_PromptChanged)
   
-  g_PromptManageBtn := g_WL_Gui.AddButton("x+5 yp w58 h24", g_WL_LangMode = "EN" ? "Manage" : "管理")
+  g_PromptManageBtn := g_WL_Gui.AddButton("x+5 yp-2 w58 h24", g_WL_LangMode = "EN" ? "Manage" : "管理")
   g_PromptManageBtn.OnEvent("Click", Gui_ManagePrompts)
 
   ; 图钉按钮（紧跟管理按钮，高度对齐）
