@@ -502,6 +502,10 @@ Gui_ToggleSelect(*)
   ; 获取当前焦点控件
   focusedHwnd := ControlGetFocus("A")
   
+  ; 如果翻译/纠错控件不存在（如在查词窗口中），直接返回
+  if (!IsObject(g_TranslateEditCtrl) || !IsObject(g_CorrectEditCtrl))
+    return
+  
   ; 在翻译、纠错、AI回答三个结果框之间循环切换焦点
   if (focusedHwnd = g_TranslateEditCtrl.Hwnd) {
     g_CorrectEditCtrl.Focus()
@@ -509,7 +513,8 @@ Gui_ToggleSelect(*)
     g_CorrectLabelCtrl.Text := "✓ " . correctLabel
     g_TranslateLabelCtrl.Text := "   " . translateLabel
   } else if (focusedHwnd = g_CorrectEditCtrl.Hwnd) {
-    g_AnswerEditCtrl.Focus()
+    if (IsObject(g_AnswerEditCtrl))
+      g_AnswerEditCtrl.Focus()
   } else {
     g_TranslateEditCtrl.Focus()
     g_SelectedResult := "translate"
