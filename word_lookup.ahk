@@ -325,15 +325,13 @@ ShowWordPopup(word, context, posX, posY)
   ; 标题行水平排列
   g_WL_Gui.SetFont("s14 c1a1a2e Bold", "Microsoft YaHei")
   
-  ; 单词可编辑输入框 + 中英切换按钮 + Anki + 图钉
-  g_WL_WordEdit := g_WL_Gui.AddEdit("w190 Section -E0x200", word)
+  ; 单词可编辑输入框 + 中英切换按钮
+  g_WL_WordEdit := g_WL_Gui.AddEdit("w225 Section -E0x200", word)
   
   g_WL_Gui.SetFont("s9 c333333 Norm", "Microsoft YaHei")
-  g_WL_LangBtn := g_WL_Gui.AddButton("x+5 ys w35 h26", g_WL_LangMode = "EN" ? "EN" : "中")
+  g_WL_LangBtn := g_WL_Gui.AddButton("x+5 ys w40 h26", g_WL_LangMode = "EN" ? "EN" : "中")
   g_WL_Gui.SetFont("s9 c333333 Norm", "Microsoft YaHei")
-  g_WL_AnkiBtn := g_WL_Gui.AddText("x+5 ys w50 h26 Center 0x200 Border BackgroundF0F0F0", "➕ Anki")
-  g_WL_Gui.SetFont("s9 " . (g_WL_IsPinned ? "cCC0000 Bold" : "c333333 Norm"), "Microsoft YaHei")
-  g_WL_PinBtn := g_WL_Gui.AddText("x+5 ys w26 h26 Center 0x200 Border BackgroundF0F0F0", g_WL_IsPinned ? "📍" : "📌")
+  g_WL_AnkiBtn := g_WL_Gui.AddText("x+5 ys w60 h26 Center 0x200 Border BackgroundF0F0F0", "➕ Anki")
   g_WL_Gui.SetFont("s9 c333333 Norm", "Microsoft YaHei")
   
   ; 关联事件
@@ -342,9 +340,6 @@ ShowWordPopup(word, context, posX, posY)
   }
   if (g_WL_AnkiBtn) {
     g_WL_AnkiBtn.OnEvent("Click", (*) => WL_SendToAnki())
-  }
-  if (g_WL_PinBtn) {
-    g_WL_PinBtn.OnEvent("Click", (*) => WL_TogglePin())
   }
 
 
@@ -371,13 +366,19 @@ ShowWordPopup(word, context, posX, posY)
   for name in g_PromptNames {
     promptList .= (promptList = "" ? "" : "|") . name
   }
-  g_PromptDropdown := g_WL_Gui.AddDropDownList("x+2 yp-3 w200", StrSplit(promptList, "|"))
+  g_PromptDropdown := g_WL_Gui.AddDropDownList("x+2 yp-3 w170", StrSplit(promptList, "|"))
   if (g_SelectedPrompt != "")
     g_PromptDropdown.Text := g_SelectedPrompt
   g_PromptDropdown.OnEvent("Change", Gui_PromptChanged)
   
   g_PromptManageBtn := g_WL_Gui.AddButton("x+5 yp w58 h24", g_WL_LangMode = "EN" ? "Manage" : "管理")
   g_PromptManageBtn.OnEvent("Click", Gui_ManagePrompts)
+
+  ; 图钉按钮（紧跟管理按钮，高度对齐）
+  g_WL_Gui.SetFont("s9 " . (g_WL_IsPinned ? "cCC0000 Bold" : "c333333 Norm"), "Microsoft YaHei")
+  g_WL_PinBtn := g_WL_Gui.AddText("x+5 yp w24 h24 Center 0x200 Border BackgroundF0F0F0", g_WL_IsPinned ? "📍" : "📌")
+  g_WL_PinBtn.OnEvent("Click", (*) => WL_TogglePin())
+  g_WL_Gui.SetFont("s9 c333333 Norm", "Microsoft YaHei")
 
   g_WL_Gui.SetFont("s9 c333333", "Microsoft YaHei")
   g_WL_QuestionLabel := g_WL_Gui.AddText("xs Section", g_WL_LangMode = "EN" ? "Question:" : "问题:")
