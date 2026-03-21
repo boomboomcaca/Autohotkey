@@ -1,4 +1,4 @@
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+﻿;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ; 鼠标取词 + 语境解释 - Alt+W：截取鼠标所在窗口 → Windows OCR → 定位单词 → Ollama 解释
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -318,20 +318,26 @@ ShowWordPopup(word, context, posX, posY)
 
   g_WL_Gui := Gui("+AlwaysOnTop -Caption +Border +Owner")
   g_MainGui := g_WL_Gui  ; 兼容 ollama_prompt_chat.ahk
-  g_WL_Gui.BackColor := "FFFFFF"
-  g_WL_Gui.MarginX := 12
-  g_WL_Gui.MarginY := 8
+  g_WL_Gui.BackColor := "F5F6F8"
+  g_WL_Gui.MarginX := 16
+  g_WL_Gui.MarginY := 12
+
+  ; Windows 11 圆角 + 阴影
+  try {
+    DllCall("dwmapi\DwmSetWindowAttribute", "Ptr", g_WL_Gui.Hwnd, "Int", 33, "Int*", 2, "Int", 4)  ; 圆角
+    DllCall("dwmapi\DwmSetWindowAttribute", "Ptr", g_WL_Gui.Hwnd, "Int", 2, "Int*", 1, "Int", 4)   ; 阴影
+  }
 
   ; 标题行水平排列
-  g_WL_Gui.SetFont("s14 c1a1a2e Bold", "Microsoft YaHei")
+  g_WL_Gui.SetFont("s14 c2D3142 Bold", "Microsoft YaHei")
   
   ; 单词可编辑输入框 + 中英切换按钮
   g_WL_WordEdit := g_WL_Gui.AddEdit("w225 Section -E0x200", word)
   
   g_WL_Gui.SetFont("s9 c333333 Norm", "Microsoft YaHei")
-  g_WL_LangBtn := g_WL_Gui.AddText("x+5 ys w35 h26 Center 0x200 Border BackgroundF0F0F0", g_WL_LangMode = "EN" ? "EN" : "中")
+  g_WL_LangBtn := g_WL_Gui.AddText("x+5 ys w35 h26 Center 0x200 Border BackgroundE8EAF0", g_WL_LangMode = "EN" ? "EN" : "中")
   g_WL_Gui.SetFont("s9 c333333 Norm", "Microsoft YaHei")
-  g_WL_AnkiBtn := g_WL_Gui.AddText("x+5 ys w50 h26 Center 0x200 Border BackgroundF0F0F0", "➕ Anki")
+  g_WL_AnkiBtn := g_WL_Gui.AddText("x+5 ys w50 h26 Center 0x200 Border BackgroundE8EAF0", "➕ Anki")
   g_WL_Gui.SetFont("s9 c333333 Norm", "Microsoft YaHei")
   
   ; 关联事件
@@ -349,7 +355,7 @@ ShowWordPopup(word, context, posX, posY)
   g_OrigEditCtrl := g_WL_ContextEdit ; 兼容 ollama_prompt_chat.ahk
 
   ; 分隔线
-  g_WL_Gui.SetFont("s1 cCCCCCC", "Microsoft YaHei")
+  g_WL_Gui.SetFont("s1 cE0E2E8", "Microsoft YaHei")
   g_WL_Gui.AddText("xs w320 0x10")  ; SS_ETCHEDHORZ
 
   ; 结果区域（可选中复制）
@@ -360,7 +366,7 @@ ShowWordPopup(word, context, posX, posY)
   ; AI 问答区域 (右侧面板)
   ; ==========================================================
   g_WL_Gui.SetFont("s9 c333333", "Microsoft YaHei")
-  g_WL_PromptLabel := g_WL_Gui.AddText("x350 y12 w50 Section", g_WL_LangMode = "EN" ? "Prompt:" : "提示词:")
+  g_WL_PromptLabel := g_WL_Gui.AddText("x358 y16 w50 Section", g_WL_LangMode = "EN" ? "Prompt:" : "提示词:")
   
   promptList := ""
   for name in g_PromptNames {
@@ -371,12 +377,12 @@ ShowWordPopup(word, context, posX, posY)
     g_PromptDropdown.Text := g_SelectedPrompt
   g_PromptDropdown.OnEvent("Change", Gui_PromptChanged)
   
-  g_PromptManageBtn := g_WL_Gui.AddText("x+5 yp-2 w58 h24 Center 0x200 Border BackgroundF0F0F0", g_WL_LangMode = "EN" ? "Manage" : "管理")
+  g_PromptManageBtn := g_WL_Gui.AddText("x+5 yp-2 w58 h24 Center 0x200 Border BackgroundE8EAF0", g_WL_LangMode = "EN" ? "Manage" : "管理")
   g_PromptManageBtn.OnEvent("Click", Gui_ManagePrompts)
 
   ; 图钉按钮（紧跟管理按钮，高度对齐）
   g_WL_Gui.SetFont("s9 " . (g_WL_IsPinned ? "cCC0000 Bold" : "c333333 Norm"), "Microsoft YaHei")
-  g_WL_PinBtn := g_WL_Gui.AddText("x+5 yp w24 h24 Center 0x200 Border BackgroundF0F0F0", g_WL_IsPinned ? "📍" : "📌")
+  g_WL_PinBtn := g_WL_Gui.AddText("x+5 yp w24 h24 Center 0x200 Border BackgroundE8EAF0", g_WL_IsPinned ? "📍" : "📌")
   g_WL_PinBtn.OnEvent("Click", (*) => WL_TogglePin())
   g_WL_Gui.SetFont("s9 c333333 Norm", "Microsoft YaHei")
 
@@ -388,7 +394,7 @@ ShowWordPopup(word, context, posX, posY)
   g_TtsQuestionCtrl.OnEvent("Click", Gui_PlayQuestion)
   
   g_QuestionEditCtrl := g_WL_Gui.AddEdit("xs w255 h50 -E0x200", word)
-  g_SendBtnCtrl := g_WL_Gui.AddText("x+5 yp w60 h50 Center 0x200 Border BackgroundF0F0F0", g_WL_LangMode = "EN" ? "Send" : "发送")
+  g_SendBtnCtrl := g_WL_Gui.AddText("x+5 yp w60 h50 Center 0x200 Border BackgroundE8EAF0", g_WL_LangMode = "EN" ? "Send" : "发送")
   g_SendBtnCtrl.OnEvent("Click", Gui_SendQuestion)
 
   g_WL_Gui.SetFont("s9 c333333", "Microsoft YaHei")
@@ -396,8 +402,8 @@ ShowWordPopup(word, context, posX, posY)
   g_AnswerEditCtrl := g_WL_Gui.AddEdit("xs w320 h197 ReadOnly -E0x200", "")
 
   ; 底部提示
-  g_WL_Gui.SetFont("s8 cAAAAAA", "Microsoft YaHei")
-  g_WL_BottomHint := g_WL_Gui.AddText("xm w650", g_WL_LangMode = "EN" ? "Enter to Re-query | Mouse out to Close | Esc to Close | Tab to Switch Focus" : "Enter 重新查询 | 鼠标移出关闭 | Esc 关闭 | Tab 切换焦点")
+  g_WL_Gui.SetFont("s8 cA0A4B0", "Microsoft YaHei")
+  g_WL_BottomHint := g_WL_Gui.AddText("xm w660", g_WL_LangMode = "EN" ? "Enter Re-query │ Mouse-out Close │ Esc Close │ Tab Switch" : "Enter 重新查询 │ 鼠标移出关闭 │ Esc 关闭 │ Tab 切换焦点")
 
   ; 先在屏幕外显示一次，获取窗口的真实尺寸
   g_WL_Gui.Show("x-9999 y-9999 NoActivate")
@@ -820,424 +826,4 @@ WL_ReadStreamContent(filePath)
   return StripEmoji(result)
 }
 
-; ===== 切换图钉状态 =====
-WL_TogglePin()
-{
-    global g_WL_IsPinned, g_WL_PinBtn
-    g_WL_IsPinned := !g_WL_IsPinned
-    if (g_WL_PinBtn) {
-        g_WL_PinBtn.Text := g_WL_IsPinned ? "📍" : "📌"
-        g_WL_PinBtn.SetFont("s9 " . (g_WL_IsPinned ? "cCC0000 Bold" : "c333333 Norm"), "Microsoft YaHei")
-    }
-}
-
-; ===== 支持拖动窗口 =====
-WL_WM_LBUTTONDOWN(wParam, lParam, msg, hwnd)
-{
-    global g_WL_Gui
-    if (g_WL_Gui != "" && hwnd == g_WL_Gui.Hwnd) {
-        PostMessage(0xA1, 2, 0, , "ahk_id " . hwnd)
-    }
-}
-
-; ===== 关闭浮窗 =====
-CloseWordGui()
-{
-  global g_WL_Gui, g_WL_ResultCtrl, g_WL_TitleCtrl
-  global g_WL_StreamPid, g_WL_Pending, g_WL_StreamFile
-  global g_WL_WordEdit, g_WL_ContextEdit
-  global g_StreamPidChat, g_ChatPending, g_QuestionEditCtrl, g_AnswerEditCtrl, g_SendBtnCtrl
-  global g_TtsPlaying, g_HoverTarget, g_MainGui
-
-  ; 终止请求
-  if (g_WL_StreamPid > 0) {
-    try ProcessClose(g_WL_StreamPid)
-    g_WL_StreamPid := 0
-  }
-  if (g_StreamPidChat > 0) {
-    try ProcessClose(g_StreamPidChat)
-    g_StreamPidChat := 0
-  }
-  g_WL_Pending := false
-  g_ChatPending := false
-  SetTimer(CheckWordResult, 0)
-  SetTimer(CheckChatResult, 0)
-  SetTimer(WL_CheckClickOutside, 0)
-  SetTimer(CheckTtsHover, 0)
-  try SoundPlay("NonExistent.zzz")
-  g_TtsPlaying := false
-  g_HoverTarget := ""
-
-  ; 彻底清理临时文件
-  try FileDelete(g_WL_StreamFile)
-  try FileDelete(A_Temp . "\ahk_wl_request_word.json")
-
-  ; 销毁 GUI
-  if (g_WL_Gui != "") {
-    try {
-      HotIfWinActive("ahk_id " g_WL_Gui.Hwnd)
-      Hotkey("Escape", WL_HandleEsc, "Off")
-      Hotkey("Enter", WL_HandleEnter, "Off")
-      Hotkey("NumpadEnter", WL_HandleEnter, "Off")
-      Hotkey("!Left", "Off")
-      Hotkey("!Right", "Off")
-      HotIfWinActive()
-    }
-    try g_WL_Gui.Destroy()
-    g_WL_Gui := ""
-    g_WL_ResultCtrl := ""
-    g_WL_TitleCtrl := ""
-    g_WL_WordEdit := ""
-    g_WL_ContextEdit := ""
-    g_QuestionEditCtrl := ""
-    g_AnswerEditCtrl := ""
-    g_SendBtnCtrl := ""
-    g_PromptDropdown := ""
-    g_MainGui := ""
-    g_WL_AnkiBtn := ""
-  }
-}
-
-; ===== 兼容性辅助函数 (供 ollama_prompt_chat.ahk 使用) =====
-
-; IsStreamComplete 已移至共享库
-
-
-; ===== 预生成 TTS 音频（后台） =====
-WL_PregenTts(word)
-{
-  global g_WL_TtsFile, g_WL_TtsPid, g_WL_TtsWord
-
-  ; 终止上一次预生成
-  if (g_WL_TtsPid > 0) {
-    try ProcessClose(g_WL_TtsPid)
-    g_WL_TtsPid := 0
-  }
-
-  text := Trim(word)
-  if (text = "")
-    return
-
-  g_WL_TtsWord := text
-  g_WL_TtsFile := A_Temp . "\ahk_wl_tts_" . A_TickCount . ".mp3"
-  
-  ; 顺便清理一下历史遗留的这种临时文件，防止堆积
-  try {
-    Loop Files, A_Temp . "\ahk_wl_tts_*.mp3"
-      if (A_LoopFileFullPath != g_WL_TtsFile)
-        FileDelete(A_LoopFileFullPath)
-  }
-
-  escapedText := StrReplace(text, '"', '\"')
-  try {
-    Run('edge-tts --voice en-US-AriaNeural --text "' . escapedText . '" --write-media "' . g_WL_TtsFile . '"', , "Hide", &outPid)
-    g_WL_TtsPid := outPid
-  }
-}
-
-; ===== 强制单次朗读（右键触发） =====
-WL_PlayTtsOnce()
-{
-  global WL_CurrentWord, g_WL_TtsFile, g_WL_TtsPid, g_WL_TtsWord
-
-  text := Trim(WL_CurrentWord)
-  if (text = "")
-    return
-
-  if (text != g_WL_TtsWord) {
-    WL_PregenTts(text)
-  }
-
-  ; 非阻塞等待 edge-tts
-  if (g_WL_TtsPid > 0 && ProcessExist(g_WL_TtsPid)) {
-    SetTimer(WL_PlayTtsOnce, -100)
-    return
-  }
-  g_WL_TtsPid := 0
-
-  try {
-    if FileExist(g_WL_TtsFile) {
-      ; 打断上一次朗读
-      try SoundPlay("NonExistent.zzz")
-      SoundPlay(g_WL_TtsFile)
-    }
-  } catch {
-  }
-}
-
-; ===== 基于窗口存在的全局右键拦截防止菜单弹出 =====
-#HotIf WL_IsWordGuiShown()
-RButton::
-{
-  global g_WL_InitMouseX, g_WL_InitMouseY, g_WL_MouseMoved, g_WL_ShowTick
-  
-  ; 1. 朗读（非阻塞）
-  WL_PlayTtsOnce()
-  
-  ; 2. 重置自动关闭防抖动计时器（防止因触发而导致抖动退出）
-  CoordMode("Mouse", "Screen")
-  MouseGetPos(&g_WL_InitMouseX, &g_WL_InitMouseY)
-  g_WL_MouseMoved := false
-  g_WL_ShowTick := A_TickCount
-}
-#HotIf
-
-WL_IsWordGuiShown() {
-  global g_WL_Gui
-  return (g_WL_Gui != "")
-}
-
-; ===== 历史记录导航 =====
-WL_NavHistory(dir)
-{
-  global g_WL_History, g_WL_HistoryIdx, g_WL_WordEdit, g_WL_ContextEdit, g_WL_ResultCtrl
-  global WL_CurrentWord, WL_CurrentContext
-
-  if (g_WL_History.Length = 0)
-    return
-
-  newIdx := g_WL_HistoryIdx + dir
-  if (newIdx < 1)
-    newIdx := 1
-  if (newIdx > g_WL_History.Length)
-    newIdx := g_WL_History.Length
-
-  if (newIdx == g_WL_HistoryIdx)
-    return
-
-  g_WL_HistoryIdx := newIdx
-  item := g_WL_History[newIdx]
-
-  WL_CurrentWord := item.word
-  WL_CurrentContext := item.context
-
-  if (g_WL_WordEdit != "")
-    g_WL_WordEdit.Value := item.word
-  if (g_WL_ContextEdit != "")
-    g_WL_ContextEdit.Value := item.context
-  
-  global g_QuestionEditCtrl
-  if (g_QuestionEditCtrl != "") {
-    g_QuestionEditCtrl.Value := item.word
-    g_QuestionEditCtrl.Focus()
-    SendMessage(0x00B1, -1, -1, g_QuestionEditCtrl.Hwnd)
-  }
-
-  if (item.result != "") {
-    if (g_WL_ResultCtrl != "")
-      g_WL_ResultCtrl.Value := item.result
-    
-    ; 终止后台可能还在进行的请求，直接显示保存的结果
-    global g_WL_StreamPid, g_WL_Pending
-    if (g_WL_StreamPid > 0) {
-      try ProcessClose(g_WL_StreamPid)
-      g_WL_StreamPid := 0
-    }
-    g_WL_Pending := false
-    SetTimer(CheckWordResult, 0)
-
-  } else {
-    if (g_WL_ResultCtrl != "")
-      g_WL_ResultCtrl.Value := (g_WL_LangMode = "EN" ? "⏳ Querying..." : "⏳ 正在查询...")
-    StartWordOllamaRequest(item.word, item.context, true)
-  }
-
-  WL_PregenTts(item.word)
-
-  ; 导航操作视同活跃操作，重置自动关闭的计时器
-  global g_WL_InitMouseX, g_WL_InitMouseY, g_WL_MouseMoved, g_WL_ShowTick
-  CoordMode("Mouse", "Screen")
-  MouseGetPos(&g_WL_InitMouseX, &g_WL_InitMouseY)
-  g_WL_MouseMoved := false
-  g_WL_ShowTick := A_TickCount
-}
-
-; ===== 发送至 Anki 的核心通信模块 =====
-WL_SendToAnki(*)
-{
-    global g_WL_WordEdit, g_WL_ContextEdit, g_WL_ResultCtrl
-    global g_WL_TtsFile, g_WL_AnkiBtn
-
-    if (!g_WL_WordEdit || !g_WL_ResultCtrl || !g_WL_AnkiBtn)
-        return
-
-    word := Trim(g_WL_WordEdit.Value)
-    context := Trim(g_WL_ContextEdit.Value)
-    explanation := Trim(g_WL_ResultCtrl.Value)
-
-    if (word = "")
-        return
-
-    isAdd := InStr(g_WL_AnkiBtn.Text, "➕") || InStr(g_WL_AnkiBtn.Text, "添加")
-
-    ; 从配置文件动态读取 Anki 卡片类型映射关系
-    deckName := "英语生词"
-    try deckName := IniRead(A_ScriptDir . "\ollama_config.ini", "Anki", "DeckName")
-    
-    modelName := "问答题"
-    try modelName := IniRead(A_ScriptDir . "\ollama_config.ini", "Anki", "ModelName")
-    
-    frontField := "正面"
-    try frontField := IniRead(A_ScriptDir . "\ollama_config.ini", "Anki", "FrontField")
-    
-    backField := "背面"
-    try backField := IniRead(A_ScriptDir . "\ollama_config.ini", "Anki", "BackField")
-    
-    ; 兜底防乱码
-    if (InStr(modelName, "闁") || InStr(modelName, "瓟") || InStr(modelName, "ue1be") || InStr(modelName, "u95c2")) {
-        deckName := "英语生词"
-        modelName := "问答题"
-        frontField := "正面"
-        backField := "背面"
-    }
-
-    try {
-        http := ComObject("WinHttp.WinHttpRequest.5.1")
-        
-        if (isAdd) {
-            if (explanation = "" || InStr(explanation, "Querying") || InStr(explanation, "正在查询")) {
-                ToolTip("⚠️ 单词或释义为空/未完成，无法添加到 Anki")
-                SetTimer(ToolTip, -2000)
-                return
-            }
-
-            ; 格式化卡片文本
-            frontText := "<h2>" . word . "</h2>"
-            if (context != "" && context != word)
-                frontText .= "<br><br><span style='color:grey;'>" . StrReplace(context, "`n", "<br>") . "</span>"
-            
-            backText := StrReplace(explanation, "`n", "<br>")
-
-            ; 文本转 JSON 安全字符串闭包
-            EscapeJSON := (str) => StrReplace(StrReplace(StrReplace(StrReplace(str, "\", "\\"), "`n", "\n"), "`r", ""), "`"", "\`"")
-
-            frontJson := EscapeJSON(frontText)
-            backJson := EscapeJSON(backText)
-
-            ; 处理音频
-            audioJson := ""
-            if (g_WL_TtsFile != "" && FileExist(g_WL_TtsFile)) {
-                absPath := StrReplace(g_WL_TtsFile, "\", "\\")
-                audioJson := ',"audio": [{"path": "' . absPath . '", "filename": "ahk_tts_' . word . '.mp3", "fields": ["' . frontField . '"]}]'
-            }
-
-            ; 构建 JSON 报文
-            payload := '{"action": "addNote", "version": 6, "params": {"note": {"deckName": "' . deckName . '", "modelName": "' . modelName . '", "fields": {"' . frontField . '": "' . frontJson . '", "' . backField . '": "' . backJson . '"}, "options": {"allowDuplicate": false}, "tags": ["AHK抓取"]' . audioJson . '}}}'
-
-            try {
-                deckPayload := '{"action": "createDeck", "version": 6, "params": {"deck": "' . deckName . '"}}'
-                http.Open("POST", "http://127.0.0.1:8765", false)
-                http.SetRequestHeader("Content-Type", "application/json; charset=utf-8")
-                http.Send(deckPayload)
-                http.WaitForResponse()
-            }
-
-            http.Open("POST", "http://127.0.0.1:8765", false)
-            http.SetRequestHeader("Content-Type", "application/json; charset=utf-8")
-            http.Send(payload)
-            http.WaitForResponse()
-            res := http.ResponseText
-            
-            if (InStr(res, '"error": null')) {
-                ToolTip("⭐ 已成功添加到 Anki！")
-                g_WL_AnkiBtn.Text := "➖ Anki"
-                g_WL_AnkiBtn.SetFont("c008800 Norm")
-                SetTimer(ToolTip, -2000)
-            } else if (InStr(res, "cannot create note because it is a duplicate")) {
-                ToolTip("💡 Anki 中已存在该单词，无需重复添加")
-                g_WL_AnkiBtn.Text := "➖ Anki"
-                g_WL_AnkiBtn.SetFont("c008800 Norm")
-                SetTimer(ToolTip, -2000)
-            } else {
-                ToolTip("❌ Anki 数据格式错误（字段名不匹配）!`n" . res)
-                SetTimer(ToolTip, -3000)
-            }
-        } else {
-            ; 删除逻辑（仅搜索正面字段，避免释义误匹配）
-            escapeWord := StrReplace(StrReplace(word, "\", "\\"), "`"", "\`"")
-            query := 'deck:"' . deckName . '" ' . frontField . ':re:<h2>' . escapeWord . '</h2>'
-            jsonQuery := StrReplace(query, '"', '\"')
-            payload := '{"action": "findNotes", "version": 6, "params": {"query": "' . jsonQuery . '"}}'
-            
-            http.Open("POST", "http://127.0.0.1:8765", false)
-            http.SetRequestHeader("Content-Type", "application/json; charset=utf-8")
-            http.Send(payload)
-            http.WaitForResponse()
-            res := http.ResponseText
-            
-            if (RegExMatch(res, '"result":\s*\[(.*?)\]', &m)) {
-                ids := Trim(m[1])
-                if (ids != "") {
-                    delPayload := '{"action": "deleteNotes", "version": 6, "params": {"notes": [' . ids . ']}}'
-                    http.Open("POST", "http://127.0.0.1:8765", false)
-                    http.SetRequestHeader("Content-Type", "application/json; charset=utf-8")
-                    http.Send(delPayload)
-                    http.WaitForResponse()
-                    
-                    ToolTip("🗑️ 已从 Anki 移除该单词")
-                    g_WL_AnkiBtn.Text := "➕ Anki"
-                    g_WL_AnkiBtn.SetFont("c333333 Norm")
-                    SetTimer(ToolTip, -2000)
-                    return
-                }
-            }
-            ToolTip("⚠️ 未找到对应的 Anki 笔记")
-            g_WL_AnkiBtn.Text := "➕ Anki"
-            g_WL_AnkiBtn.SetFont("c333333 Norm")
-            SetTimer(ToolTip, -2000)
-        }
-    } catch Error as e {
-        ToolTip("❌ 无法连接到 Anki`n请确保 Anki 客户端已启动且安装了 AnkiConnect 插件")
-        SetTimer(ToolTip, -3000)
-    }
-}
-
-WL_CheckAnkiStatus(word) {
-    global g_WL_AnkiBtn, g_WL_Gui
-    if (!g_WL_AnkiBtn || !g_WL_Gui) {
-        return
-    }
-        
-    deckName := "英语生词"
-    try deckName := IniRead(A_ScriptDir . "\ollama_config.ini", "Anki", "DeckName")
-    if (InStr(deckName, "闁") || InStr(deckName, "ue1be")) {
-        deckName := "英语生词"
-    }
-
-    frontField := "正面"
-    try frontField := IniRead(A_ScriptDir . "\ollama_config.ini", "Anki", "FrontField")
-
-    escapeWord := StrReplace(StrReplace(word, "\", "\\"), "`"", "\`"")
-    query := 'deck:"' . deckName . '" ' . frontField . ':re:<h2>' . escapeWord . '</h2>'
-    jsonQuery := StrReplace(query, '"', '\"')
-    payload := '{"action": "findNotes", "version": 6, "params": {"query": "' . jsonQuery . '"}}'
-    
-    try {
-        http := ComObject("WinHttp.WinHttpRequest.5.1")
-        http.Open("POST", "http://127.0.0.1:8765", false)
-        http.SetTimeouts(1000, 1000, 1000, 1000)
-        http.SetRequestHeader("Content-Type", "application/json; charset=utf-8")
-        http.Send(payload)
-        http.WaitForResponse()
-        res := http.ResponseText
-        
-        ; HTTP 请求期间 GUI 可能已关闭，再次检查
-        if (!g_WL_AnkiBtn || !g_WL_Gui)
-            return
-        
-        if (RegExMatch(res, '"result":\s*\[(.*?)\]', &m)) {
-            ids := Trim(m[1])
-            if (ids != "") {
-                try g_WL_AnkiBtn.Text := "➖ Anki"
-                try g_WL_AnkiBtn.SetFont("c008800 Norm")
-                return
-            }
-        }
-    } catch {
-        ; 忽略连接失败或控件已销毁
-        return
-    }
-    try g_WL_AnkiBtn.Text := "➕ Anki"
-    try g_WL_AnkiBtn.SetFont("c333333 Norm")
-}
-
+#Include "word_lookup_utils.ahk"
