@@ -273,7 +273,7 @@ F2::
 ; ===== 显示取词浮窗 =====
 ShowWordPopup(word, context, posX, posY)
 {
-  global g_WL_Gui, g_WL_ResultCtrl, g_WL_TitleCtrl, g_WL_WordEdit, g_WL_ContextEdit, WL_CurrentWord, WL_CurrentContext, g_WL_LangMode, g_WL_LangBtn
+  global g_WL_Gui, g_WL_ResultCtrl, g_WL_TitleCtrl, g_WL_WordEdit, g_WL_ContextEdit, WL_CurrentWord, WL_CurrentContext, g_WL_LangMode, g_WL_LangBtn, g_WL_AnkiBtn
   global g_IsChineseMode, g_QuestionEditCtrl, g_AnswerEditCtrl, g_SendBtnCtrl, g_PromptDropdown
   global g_MainGui, g_OrigEditCtrl, g_PromptNames, g_SelectedPrompt, g_PromptManageBtn, g_TtsQuestionCtrl
   global g_WL_QuestionLabel, g_WL_AnswerLabel, g_WL_PromptLabel, g_WL_BottomHint
@@ -608,6 +608,8 @@ StartWordOllamaRequest(word, context, isNavigating := false)
 {
   global g_WL_StreamFile, g_WL_StreamPid, g_WL_Pending, g_WL_StreamContent, g_WL_LangMode
   global g_WL_History, g_WL_HistoryIdx
+
+  WL_CheckAnkiStatus(word)
 
   ; 历史记录处理
   if (!isNavigating) {
@@ -1019,18 +1021,17 @@ WL_SendToAnki(*)
     global g_WL_WordEdit, g_WL_ContextEdit, g_WL_ResultCtrl
     global g_WL_TtsFile, g_WL_AnkiBtn
 
-    if (!g_WL_WordEdit || !g_WL_ResultCtrl)
+    if (!g_WL_WordEdit || !g_WL_ResultCtrl || !g_WL_AnkiBtn)
         return
 
     word := Trim(g_WL_WordEdit.Value)
     context := Trim(g_WL_ContextEdit.Value)
     explanation := Trim(g_WL_ResultCtrl.Value)
 
-    if (word = "" || explanation = "" || InStr(explanation, "Querying") || InStr(explanation, "正在查询")) {
-        ToolTip("⚠️ 单词或释义为空/未完成，无法添加到 Anki")
-        SetTimer(ToolTip, -2000)
+    if (word = "")
         return
-    }
+
+    isAdd := InStr(g_WL_AnkiBtn.Text, "➕") || InStr(g_WL_AnkiBtn.Text, "添加")
 
     ; 从配置文件动态读取 Anki 卡片类型映射关系
     deckName := "英语生词"
@@ -1045,7 +1046,7 @@ WL_SendToAnki(*)
     backField := "背面"
     try backField := IniRead(A_ScriptDir . "\ollama_config.ini", "Anki", "BackField")
     
-    ; 兜底防乱码：如果从配置文件读出来的是乱码（含有非预期字符），强制重置为正确的默认值
+    ; 兜底防乱码
     if (InStr(modelName, "闁") || InStr(modelName, "瓟") || InStr(modelName, "ue1be") || InStr(modelName, "u95c2")) {
         deckName := "英语生词"
         modelName := "问答题"
@@ -1053,68 +1054,139 @@ WL_SendToAnki(*)
         backField := "背面"
     }
 
-    ; 格式化卡片文本
-    frontText := "<h2>" . word . "</h2>"
-    if (context != "" && context != word)
-        frontText .= "<br><br><span style='color:grey;'>" . StrReplace(context, "`n", "<br>") . "</span>"
-    
-    backText := StrReplace(explanation, "`n", "<br>")
-
-    ; 文本转 JSON 安全字符串闭包
-    EscapeJSON := (str) => StrReplace(StrReplace(StrReplace(StrReplace(str, "\", "\\"), "`n", "\n"), "`r", ""), "`"", "\`"")
-
-    frontJson := EscapeJSON(frontText)
-    backJson := EscapeJSON(backText)
-
-    ; 处理音频：如果高保真 TTS 缓存存在，将文件绝对路径一并打包发给 Anki 进行云端同步
-    audioJson := ""
-    if (g_WL_TtsFile != "" && FileExist(g_WL_TtsFile)) {
-        absPath := StrReplace(g_WL_TtsFile, "\", "\\")
-        audioJson := ',"audio": [{"path": "' . absPath . '", "filename": "ahk_tts_' . word . '.mp3", "fields": ["' . frontField . '"]}]'
-    }
-
-    ; 构建 JSON 报文
-    payload := '{"action": "addNote", "version": 6, "params": {"note": {"deckName": "' . deckName . '", "modelName": "' . modelName . '", "fields": {"' . frontField . '": "' . frontJson . '", "' . backField . '": "' . backJson . '"}, "options": {"allowDuplicate": false}, "tags": ["AHK抓取"]' . audioJson . '}}}'
-
     try {
         http := ComObject("WinHttp.WinHttpRequest.5.1")
         
-        ; 第一步：强制确保牌组存在，如果不存在则自动创建，这样就不会再报错 deck not found
-        deckPayload := '{"action": "createDeck", "version": 6, "params": {"deck": "' . deckName . '"}}'
-        http.Open("POST", "http://127.0.0.1:8765", false)
-        http.SetRequestHeader("Content-Type", "application/json; charset=utf-8")
-        http.Send(deckPayload)
-        http.WaitForResponse()
-
-        ; 第二步：发送真正的卡片数据
-        http.Open("POST", "http://127.0.0.1:8765", false)
-        http.SetRequestHeader("Content-Type", "application/json; charset=utf-8")
-        http.Send(payload)
-        http.WaitForResponse()
-        res := http.ResponseText
-        
-        if (InStr(res, '"error": null')) {
-            ToolTip("⭐ 已成功添加到 Anki！")
-            SetTimer(ToolTip, -2000)
-            if (g_WL_AnkiBtn) {
-                origText := g_WL_AnkiBtn.Text
-                g_WL_AnkiBtn.Text := "✓ 成功"
-                SetTimer(() => (g_WL_AnkiBtn ? g_WL_AnkiBtn.Text := origText : ""), -2000)
+        if (isAdd) {
+            if (explanation = "" || InStr(explanation, "Querying") || InStr(explanation, "正在查询")) {
+                ToolTip("⚠️ 单词或释义为空/未完成，无法添加到 Anki")
+                SetTimer(ToolTip, -2000)
+                return
             }
-        } else if (InStr(res, "cannot create note because it is a duplicate")) {
-            ToolTip("💡 Anki 中已存在该单词，无需重复添加")
-            SetTimer(ToolTip, -2000)
-            if (g_WL_AnkiBtn) {
-                origText := g_WL_AnkiBtn.Text
-                g_WL_AnkiBtn.Text := "× 重复"
-                SetTimer(() => (g_WL_AnkiBtn ? g_WL_AnkiBtn.Text := origText : ""), -2000)
+
+            ; 格式化卡片文本
+            frontText := "<h2>" . word . "</h2>"
+            if (context != "" && context != word)
+                frontText .= "<br><br><span style='color:grey;'>" . StrReplace(context, "`n", "<br>") . "</span>"
+            
+            backText := StrReplace(explanation, "`n", "<br>")
+
+            ; 文本转 JSON 安全字符串闭包
+            EscapeJSON := (str) => StrReplace(StrReplace(StrReplace(StrReplace(str, "\", "\\"), "`n", "\n"), "`r", ""), "`"", "\`"")
+
+            frontJson := EscapeJSON(frontText)
+            backJson := EscapeJSON(backText)
+
+            ; 处理音频
+            audioJson := ""
+            if (g_WL_TtsFile != "" && FileExist(g_WL_TtsFile)) {
+                absPath := StrReplace(g_WL_TtsFile, "\", "\\")
+                audioJson := ',"audio": [{"path": "' . absPath . '", "filename": "ahk_tts_' . word . '.mp3", "fields": ["' . frontField . '"]}]'
+            }
+
+            ; 构建 JSON 报文
+            payload := '{"action": "addNote", "version": 6, "params": {"note": {"deckName": "' . deckName . '", "modelName": "' . modelName . '", "fields": {"' . frontField . '": "' . frontJson . '", "' . backField . '": "' . backJson . '"}, "options": {"allowDuplicate": false}, "tags": ["AHK抓取"]' . audioJson . '}}}'
+
+            try {
+                deckPayload := '{"action": "createDeck", "version": 6, "params": {"deck": "' . deckName . '"}}'
+                http.Open("POST", "http://127.0.0.1:8765", false)
+                http.SetRequestHeader("Content-Type", "application/json; charset=utf-8")
+                http.Send(deckPayload)
+                http.WaitForResponse()
+            }
+
+            http.Open("POST", "http://127.0.0.1:8765", false)
+            http.SetRequestHeader("Content-Type", "application/json; charset=utf-8")
+            http.Send(payload)
+            http.WaitForResponse()
+            res := http.ResponseText
+            
+            if (InStr(res, '"error": null')) {
+                ToolTip("⭐ 已成功添加到 Anki！")
+                g_WL_AnkiBtn.Text := "➖ Anki"
+                SetTimer(ToolTip, -2000)
+            } else if (InStr(res, "cannot create note because it is a duplicate")) {
+                ToolTip("💡 Anki 中已存在该单词，无需重复添加")
+                g_WL_AnkiBtn.Text := "➖ Anki"
+                SetTimer(ToolTip, -2000)
+            } else {
+                ToolTip("❌ Anki 数据格式错误（字段名不匹配）!`n" . res)
+                SetTimer(ToolTip, -3000)
             }
         } else {
-            ToolTip("❌ Anki 数据格式错误（字段名不匹配）!`n" . res)
-            SetTimer(ToolTip, -3000)
+            ; 删除逻辑
+            escapeWord := StrReplace(StrReplace(word, "\", "\\"), "`"", "\`"")
+            query := 'deck:"' . deckName . '" "' . escapeWord . '"'
+            jsonQuery := StrReplace(query, '"', '\"')
+            payload := '{"action": "findNotes", "version": 6, "params": {"query": "' . jsonQuery . '"}}'
+            
+            http.Open("POST", "http://127.0.0.1:8765", false)
+            http.SetRequestHeader("Content-Type", "application/json; charset=utf-8")
+            http.Send(payload)
+            http.WaitForResponse()
+            res := http.ResponseText
+            
+            if (RegExMatch(res, '"result":\s*\[(.*?)\]', &m)) {
+                ids := Trim(m[1])
+                if (ids != "") {
+                    delPayload := '{"action": "deleteNotes", "version": 6, "params": {"notes": [' . ids . ']}}'
+                    http.Open("POST", "http://127.0.0.1:8765", false)
+                    http.SetRequestHeader("Content-Type", "application/json; charset=utf-8")
+                    http.Send(delPayload)
+                    http.WaitForResponse()
+                    
+                    ToolTip("🗑️ 已从 Anki 移除该单词")
+                    g_WL_AnkiBtn.Text := "➕ Anki"
+                    SetTimer(ToolTip, -2000)
+                    return
+                }
+            }
+            ToolTip("⚠️ 未找到对应的 Anki 笔记")
+            g_WL_AnkiBtn.Text := "➕ Anki"
+            SetTimer(ToolTip, -2000)
         }
     } catch Error as e {
         ToolTip("❌ 无法连接到 Anki`n请确保 Anki 客户端已启动且安装了 AnkiConnect 插件")
         SetTimer(ToolTip, -3000)
     }
 }
+
+WL_CheckAnkiStatus(word) {
+    global g_WL_AnkiBtn
+    if (!g_WL_AnkiBtn) {
+        return
+    }
+        
+    deckName := "英语生词"
+    try deckName := IniRead(A_ScriptDir . "\ollama_config.ini", "Anki", "DeckName")
+    if (InStr(deckName, "闁") || InStr(deckName, "ue1be")) {
+        deckName := "英语生词"
+    }
+
+    escapeWord := StrReplace(StrReplace(word, "\", "\\"), "`"", "\`"")
+    query := 'deck:"' . deckName . '" "' . escapeWord . '"'
+    jsonQuery := StrReplace(query, '"', '\"')
+    payload := '{"action": "findNotes", "version": 6, "params": {"query": "' . jsonQuery . '"}}'
+    
+    try {
+        http := ComObject("WinHttp.WinHttpRequest.5.1")
+        http.Open("POST", "http://127.0.0.1:8765", false)
+        http.SetTimeouts(1000, 1000, 1000, 1000)
+        http.SetRequestHeader("Content-Type", "application/json; charset=utf-8")
+        http.Send(payload)
+        http.WaitForResponse()
+        res := http.ResponseText
+        
+        if (RegExMatch(res, '"result":\s*\[(.*?)\]', &m)) {
+            ids := Trim(m[1])
+            if (ids != "") {
+                g_WL_AnkiBtn.Text := "➖ Anki"
+                return
+            }
+        }
+    } catch {
+        ; 忽略连接失败
+    }
+    g_WL_AnkiBtn.Text := "➕ Anki"
+}
+
