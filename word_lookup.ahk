@@ -329,9 +329,9 @@ ShowWordPopup(word, context, posX, posY)
   g_WL_WordEdit := g_WL_Gui.AddEdit("w225 Section -E0x200", word)
   
   g_WL_Gui.SetFont("s9 c333333 Norm", "Microsoft YaHei")
-  g_WL_LangBtn := g_WL_Gui.AddButton("x+5 ys w40 h26", g_WL_LangMode = "EN" ? "EN" : "中")
+  g_WL_LangBtn := g_WL_Gui.AddButton("x+5 ys w35 h26", g_WL_LangMode = "EN" ? "EN" : "中")
   g_WL_Gui.SetFont("s9 c333333 Norm", "Microsoft YaHei")
-  g_WL_AnkiBtn := g_WL_Gui.AddText("x+5 ys w60 h26 Center 0x200 Border BackgroundF0F0F0", "➕ Anki")
+  g_WL_AnkiBtn := g_WL_Gui.AddText("x+5 ys w50 h26 Center 0x200 Border BackgroundF0F0F0", "➕ Anki")
   g_WL_Gui.SetFont("s9 c333333 Norm", "Microsoft YaHei")
   
   ; 关联事件
