@@ -34,6 +34,12 @@ g_GuiHidden := false
 g_StreamContentCorrect := ""
 g_StreamContentTranslate := ""
 g_StreamContentChat := ""
+g_StreamPidCorrect := 0
+g_StreamPidTranslate := 0
+g_StreamPidChat := 0
+g_StreamFileCorrect := ""
+g_StreamFileTranslate := ""
+g_StreamFileChat := ""
 
 ; AI 问答相关
 g_QuestionEditCtrl := ""
