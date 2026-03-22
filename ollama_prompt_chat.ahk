@@ -352,7 +352,7 @@ StartChatAsync(question)
 {
   global g_StreamFileChat, g_StreamPidChat, g_StreamContentChat, g_ChatPending
   global g_SelectedPrompt, g_HttpChat
-  global g_GroqApiKey, g_GroqModel, g_GroqEndpoint
+  global g_MistralApiKey, g_MistralModel, g_MistralEndpoint
   
   ; 终止之前正在运行的 Chat 请求
   if (g_StreamPidChat > 0) {
@@ -393,14 +393,14 @@ StartChatAsync(question)
   g_StreamContentChat := ""
   
   ; 构建 JSON (使用流式，OpenAI 格式)
-  json := '{"model":"' . g_GroqModel . '","messages":[{"role":"system","content":"' . sysPrompt . '"},{"role":"user","content":"' . prompt . '"}],"temperature":0.7,"max_tokens":2048,"stream":true}'
+  json := '{"model":"' . g_MistralModel . '","messages":[{"role":"system","content":"' . sysPrompt . '"},{"role":"user","content":"' . prompt . '"}],"temperature":0.7,"max_tokens":2048,"stream":true}'
   
   try {
     ; 使用 Msxml2.XMLHTTP 启动异步流式请求
     http := ComObject("Msxml2.XMLHTTP")
-    http.Open("POST", g_GroqEndpoint, true)
+    http.Open("POST", g_MistralEndpoint, true)
     http.SetRequestHeader("Content-Type", "application/json; charset=utf-8")
-    http.SetRequestHeader("Authorization", "Bearer " . g_GroqApiKey)
+    http.SetRequestHeader("Authorization", "Bearer " . g_MistralApiKey)
     http.Send(json)
     g_HttpChat := http ; 记录对象用于轮询
     g_ChatPending := true
@@ -701,8 +701,10 @@ ParseStreamData(rawContent, &accumulatedContent)
     }
   }
   
-  if (result != "")
+  if (result != "") {
+    result := RegExReplace(result, "(\r?\n\s*){2,}", "`n")
     accumulatedContent := StripEmoji(result)
+  }
   
   return accumulatedContent
 }

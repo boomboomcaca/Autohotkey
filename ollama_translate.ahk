@@ -54,13 +54,13 @@ g_PromptManageBtn := ""
 ; 初始化 Prompt 模板
 InitPrompts()
 
-g_GroqApiKey := IniRead(A_ScriptDir . "\ollama_config.ini", "Settings", "GroqApiKey", "")
-g_GroqModel := IniRead(A_ScriptDir . "\ollama_config.ini", "Settings", "GroqModel", "llama-3.3-70b-versatile")
-g_GroqEndpoint := IniRead(A_ScriptDir . "\ollama_config.ini", "Settings", "GroqEndpoint", "https://api.groq.com/openai/v1/chat/completions")
+g_MistralApiKey := IniRead(A_ScriptDir . "\ollama_config.ini", "Settings", "MistralApiKey", "")
+g_MistralModel := IniRead(A_ScriptDir . "\ollama_config.ini", "Settings", "MistralModel", "mistral-large-latest")
+g_MistralEndpoint := IniRead(A_ScriptDir . "\ollama_config.ini", "Settings", "MistralEndpoint", "https://api.mistral.ai/v1/chat/completions")
 
 OllamaCall(prompt)
 {
-  global g_GroqApiKey, g_GroqModel, g_GroqEndpoint
+  global g_MistralApiKey, g_MistralModel, g_MistralEndpoint
   
   ; 构建 JSON
   prompt := StrReplace(prompt, "\", "\\")
@@ -72,18 +72,18 @@ OllamaCall(prompt)
   ; 系统提示：强制禁用 Markdown 和符号
   sysPrompt := "纯文本输出，不要用任何符号（如反斜杠、星号、井号）包裹或强调单词。"
   
-  json := '{"model":"' . g_GroqModel . '","messages":[{"role":"system","content":"' . sysPrompt . '"},{"role":"user","content":"' . prompt . '"}],"temperature":0,"max_tokens":1024,"stream":false}'
+  json := '{"model":"' . g_MistralModel . '","messages":[{"role":"system","content":"' . sysPrompt . '"},{"role":"user","content":"' . prompt . '"}],"temperature":0,"max_tokens":1024,"stream":false}'
   
   try {
     http := ComObject("WinHttp.WinHttpRequest.5.1")
-    http.Open("POST", g_GroqEndpoint, false)
+    http.Open("POST", g_MistralEndpoint, false)
     http.SetRequestHeader("Content-Type", "application/json; charset=utf-8")
-    http.SetRequestHeader("Authorization", "Bearer " . g_GroqApiKey)
+    http.SetRequestHeader("Authorization", "Bearer " . g_MistralApiKey)
     http.Send(json)
     http.WaitForResponse()
     
     response := http.ResponseText
-    ; Groq 返回 OpenAI 格式: {"choices":[{"message":{"content":"..."}}]}
+    ; Mistral 返回 OpenAI 格式: {"choices":[{"message":{"content":"..."}}]}
     if RegExMatch(response, '"content"\s*:\s*"((?:[^"\\]|\\.)*)"', &m)
       result := m[1]
     else
@@ -320,7 +320,7 @@ StartAsyncRequests(text, requestType := "default")
 
 StartAsyncHttp(prompt, requestType)
 {
-  global g_GroqApiKey, g_GroqModel, g_GroqEndpoint
+  global g_MistralApiKey, g_MistralModel, g_MistralEndpoint
   
   ; 系统提示：强制禁用 Markdown 和符号
   sysPrompt := "纯文本输出，不要用任何符号（如反斜杠、星号、井号）包裹或强调单词。"
@@ -333,14 +333,14 @@ StartAsyncHttp(prompt, requestType)
   prompt := StrReplace(prompt, "`t", "\t")
   
   ; 构建 JSON (使用流式，OpenAI 格式)
-  json := '{"model":"' . g_GroqModel . '","messages":[{"role":"system","content":"' . sysPrompt . '"},{"role":"user","content":"' . prompt . '"}],"temperature":0,"max_tokens":1024,"stream":true}'
+  json := '{"model":"' . g_MistralModel . '","messages":[{"role":"system","content":"' . sysPrompt . '"},{"role":"user","content":"' . prompt . '"}],"temperature":0,"max_tokens":1024,"stream":true}'
   
   try {
     ; 使用 Msxml2.XMLHTTP 支持在接收过程中读取数据 (readyState=3)
     http := ComObject("Msxml2.XMLHTTP")
-    http.Open("POST", g_GroqEndpoint, true)
+    http.Open("POST", g_MistralEndpoint, true)
     http.SetRequestHeader("Content-Type", "application/json; charset=utf-8")
-    http.SetRequestHeader("Authorization", "Bearer " . g_GroqApiKey)
+    http.SetRequestHeader("Authorization", "Bearer " . g_MistralApiKey)
     http.Send(json)
     return http
   } catch Error as e {

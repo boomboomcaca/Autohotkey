@@ -692,8 +692,8 @@ StartWordOllamaRequest(word, context, isNavigating := false)
   try FileDelete(jsonFile)
 
   ; JSON (OpenAI 格式)
-  global g_GroqApiKey, g_GroqModel, g_GroqEndpoint
-  json := '{"model":"' . g_GroqModel . '","messages":[{"role":"system","content":"' . sysPrompt . '"},{"role":"user","content":"' . prompt . '"}],"temperature":0,"max_tokens":800,"stream":true}'
+  global g_MistralApiKey, g_MistralModel, g_MistralEndpoint
+  json := '{"model":"' . g_MistralModel . '","messages":[{"role":"system","content":"' . sysPrompt . '"},{"role":"user","content":"' . prompt . '"}],"temperature":0,"max_tokens":800,"stream":true}'
 
   try {
     FileAppend(json, jsonFile, "UTF-8-RAW")
@@ -701,9 +701,9 @@ StartWordOllamaRequest(word, context, isNavigating := false)
     return
   }
 
-  ; 使用 curl.exe 调用 Groq API
+  ; 使用 curl.exe 调用 Mistral API
   try {
-    curlCmd := 'curl.exe -s -N -X POST "' . g_GroqEndpoint . '" -H "Content-Type: application/json" -H "Authorization: Bearer ' . g_GroqApiKey . '" -d "@' . jsonFile . '" -o "' . g_WL_StreamFile . '"'
+    curlCmd := 'curl.exe -s -N -X POST "' . g_MistralEndpoint . '" -H "Content-Type: application/json" -H "Authorization: Bearer ' . g_MistralApiKey . '" -d "@' . jsonFile . '" -o "' . g_WL_StreamFile . '"'
     Run(curlCmd, , "Hide", &outPid)
     g_WL_StreamPid := outPid
   } catch {
@@ -814,6 +814,7 @@ WL_ReadStreamContent(filePath)
   }
 
   result := Trim(result)
+  result := RegExReplace(result, "(\r?\n\s*){2,}", "`n")
 
   return StripEmoji(result)
 }
