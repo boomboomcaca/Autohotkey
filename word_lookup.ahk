@@ -165,8 +165,8 @@ F2::
       if (dpi < 96)
         dpi := 96
       scale := 1 ; WinRT OCR 不需要强制放大，原生支持得很好
-      captureW := Round(1200 * scale) ; 性能优化: 缩小截取范围（原 3840），鼠标取词不需要全屏
-      captureH := Round(800 * scale)  ; 性能优化: 缩小截取范围（原 2160）
+      captureW := Round(3840 * scale)
+      captureH := Round(2160 * scale)
       winX := mouseX - Round(captureW / 2)
       winY := mouseY - Round(captureH / 2)
       
