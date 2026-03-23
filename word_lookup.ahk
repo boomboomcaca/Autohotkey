@@ -165,8 +165,8 @@ F2::
       if (dpi < 96)
         dpi := 96
       scale := 1 ; WinRT OCR 不需要强制放大，原生支持得很好
-      captureW := Round(3840 * scale)
-      captureH := Round(2160 * scale)
+      captureW := Round(1200 * scale) ; 性能优化: 缩小截取范围（原 3840），鼠标取词不需要全屏
+      captureH := Round(800 * scale)  ; 性能优化: 缩小截取范围（原 2160）
       winX := mouseX - Round(captureW / 2)
       winY := mouseY - Round(captureH / 2)
       
@@ -760,6 +760,7 @@ CheckWordResult()
       Sleep(30) ; 等待文件最终刷入硬盘
       finalResult := WL_ReadStreamContent(g_WL_StreamFile)
       if (finalResult != "") {
+        finalResult := StripEmoji(finalResult) ; 仅最终结果时过滤一次 Emoji
         if (g_WL_ResultCtrl != "") {
           try g_WL_ResultCtrl.Value := finalResult
         }
@@ -831,7 +832,7 @@ WL_ReadStreamContent(filePath)
   result := Trim(result)
   result := RegExReplace(result, "(\r?\n\s*){2,}", "`n")
 
-  return StripEmoji(result)
+  return result ; 性能优化: StripEmoji 移至最终结果时统一调用，避免流式热路径重复执行
 }
 
 #Include "word_lookup_utils.ahk"

@@ -439,6 +439,9 @@ CheckChatResult()
     
     ; 如果完成，清理
     if (g_HttpChat.readyState == 4) {
+      ; 最终结果：执行一次 StripEmoji 过滤
+      if (g_AnswerEditCtrl != "" && g_StreamContentChat != "")
+        try g_AnswerEditCtrl.Value := StripEmoji(g_StreamContentChat)
       g_ChatPending := false
       g_SendBtnCtrl.Enabled := true
       g_HttpChat := ""
@@ -703,7 +706,7 @@ ParseStreamData(rawContent, &accumulatedContent)
   
   if (result != "") {
     result := RegExReplace(result, "(\r?\n\s*){2,}", "`n")
-    accumulatedContent := StripEmoji(result)
+    accumulatedContent := result ; 性能优化: StripEmoji 移至最终结果时统一调用
   }
   
   return accumulatedContent
@@ -714,15 +717,9 @@ StripEmoji(text)
 {
   ; 移除零宽字符、变体选择符、对象替换字符、装饰符号
   text := RegExReplace(text, "[\x{200B}-\x{200F}\x{200D}\x{2060}-\x{206F}\x{FEFF}\x{FFFC}\x{FFFD}\x{FE00}-\x{FE0F}\x{2600}-\x{27BF}\x{2B50}-\x{2B55}]", "")
-  ; 移除补充平面字符（Emoji 等）：过滤 UTF-16 代理对
-  result := ""
-  Loop Parse, text {
-    cp := Ord(A_LoopField)
-    if (cp >= 0xD800 && cp <= 0xDFFF)
-      continue
-    result .= A_LoopField
-  }
-  return result
+  ; 性能优化: 使用正则一次性移除 UTF-16 代理对字符，替代原先的逐字符 Loop Parse
+  text := RegExReplace(text, "[\x{D800}-\x{DFFF}]", "")
+  return text
 }
 
 ; 保留旧函数名作为兼容性代理，但逻辑改为 ParseStreamData

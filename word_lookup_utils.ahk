@@ -154,14 +154,12 @@ WL_PregenTts(word)
     return
 
   g_WL_TtsWord := text
+  ; 性能优化: 直接删除上一个文件，避免 glob 遍历 TEMP 目录
+  static prevTtsFile := ""
+  if (prevTtsFile != "" && prevTtsFile != g_WL_TtsFile)
+    try FileDelete(prevTtsFile)
   g_WL_TtsFile := A_Temp . "\ahk_wl_tts_" . A_TickCount . ".mp3"
-  
-  ; 顺便清理一下历史遗留的这种临时文件，防止堆积
-  try {
-    Loop Files, A_Temp . "\ahk_wl_tts_*.mp3"
-      if (A_LoopFileFullPath != g_WL_TtsFile)
-        FileDelete(A_LoopFileFullPath)
-  }
+  prevTtsFile := g_WL_TtsFile
 
   escapedText := StrReplace(text, '"', '\"')
   try {

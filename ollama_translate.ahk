@@ -366,33 +366,21 @@ CheckAsyncResults()
   
   ; 检查组合结果（一次调用同时返回纠错和翻译）
   if (g_CorrectPending && IsObject(g_HttpCorrect)) {
-    ; 检查是否已经开始返回或已完成 (3=Receiving, 4=Complete)
-    if (g_HttpCorrect.readyState >= 3) {
+    ; 性能优化: readyState=3 时仅显示提示文字，跳过开销高昂的 responseText 读取和 JSON 解析
+    if (g_HttpCorrect.readyState == 3) {
+      try UpdateCorrectResult("正在生成输出...")
+    }
+    ; readyState=4: 请求完成，执行一次完整解析
+    else if (g_HttpCorrect.readyState == 4) {
       try {
-        result := ParseStreamData(g_HttpCorrect.responseText, &g_StreamContentCorrect)
-        
-        ; 实时更新 GUI（可选，如果需要实时效果）
-        if (result != "") {
-          ; 简单的预解析，或者等完成后再一次性解析
-          ; 这里我们先尝试局部解析来获得更好的反馈感
-          UpdateCorrectResult("正在生成输出...") 
+        finalRes := ParseStreamData(g_HttpCorrect.responseText, &g_StreamContentCorrect)
+        if (finalRes != "") {
+          ParseCombinedResult(StripEmoji(finalRes))
         }
-      } catch {
-        ; 0x8000000A 报错说明数据暂时不可用，跳过本次轮询等待下一次
       }
-      
-      ; 检查是否完全结束
-      if (g_HttpCorrect.readyState == 4) {
-        try {
-          finalRes := ParseStreamData(g_HttpCorrect.responseText, &g_StreamContentCorrect)
-          if (finalRes != "") {
-            ParseCombinedResult(finalRes)
-          }
-        }
-        g_CorrectPending := false
-        g_TranslatePending := false
-        g_HttpCorrect := ""
-      }
+      g_CorrectPending := false
+      g_TranslatePending := false
+      g_HttpCorrect := "" ; 释放 COM 对象
     }
   }
   
