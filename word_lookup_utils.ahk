@@ -409,7 +409,9 @@ WL_SendToAnki(*)
             g_WL_AnkiBtn.Text := "➕ Anki"
             g_WL_AnkiBtn.SetFont("c333333 Norm")
         }
+        http := "" ; 使用完毕，释放 COM 对象
     } catch Error as e {
+        http := ""
     }
 }
 
@@ -449,10 +451,14 @@ WL_CheckAnkiStatus(word) {
                 SetTimer(, 0) ; 请求结束，关掉当前定时器
                 
                 global g_WL_AnkiBtn, g_WL_Gui
-                if (!g_WL_AnkiBtn || !g_WL_Gui)
+                if (!g_WL_AnkiBtn || !g_WL_Gui) {
+                    http := ""
                     return
+                }
                     
                 res := http.ResponseText
+                http := "" ; 释放 COM 对象
+                
                 if (RegExMatch(res, '"result":\s*\[(.*?)\]', &m)) {
                     ids := Trim(m[1])
                     if (ids != "") {
@@ -468,6 +474,7 @@ WL_CheckAnkiStatus(word) {
                 global g_WL_AnkiBtn
                 try g_WL_AnkiBtn.Text := "➕ Anki"
                 try g_WL_AnkiBtn.SetFont("c333333 Norm")
+                http := "" ; 发生异常时也释放
             }
         }
         

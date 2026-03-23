@@ -28,6 +28,7 @@ g_WL_StreamFile := ""
 g_WL_StreamPid := 0
 g_WL_Pending := false
 g_WL_StreamContent := ""
+g_WL_StreamFileSize := 0
 g_WL_ShowTick := 0
 g_WL_InitMouseX := 0
 g_WL_InitMouseY := 0
@@ -659,6 +660,7 @@ StartWordOllamaRequest(word, context, isNavigating := false)
 
   g_WL_Pending := true
   g_WL_StreamContent := ""
+  g_WL_StreamFileSize := 0
 
   if (g_WL_LangMode = "EN") {
     ; 构建 prompt (英英释义模式)
@@ -715,14 +717,14 @@ StartWordOllamaRequest(word, context, isNavigating := false)
     return
   }
 
-  ; 启动极速轮询
-  SetTimer(CheckWordResult, 50)
+  ; 启动极速轮询(性能优化：增加间隔至 100ms)
+  SetTimer(CheckWordResult, 100)
 }
 
 ; ===== 轮询 Ollama 结果 =====
 CheckWordResult()
 {
-  global g_WL_Pending, g_WL_StreamFile, g_WL_StreamContent, g_WL_StreamPid
+  global g_WL_Pending, g_WL_StreamFile, g_WL_StreamContent, g_WL_StreamPid, g_WL_StreamFileSize
   global g_WL_ResultCtrl, g_WL_Gui
 
   if (!g_WL_Pending || g_WL_Gui = "") {
@@ -731,12 +733,20 @@ CheckWordResult()
   }
 
   if (g_WL_StreamFile != "" && FileExist(g_WL_StreamFile)) {
-    ; 实时读取流式内容并更新浮窗
-    currentContent := WL_ReadStreamContent(g_WL_StreamFile)
-    if (currentContent != "" && currentContent != g_WL_StreamContent) {
-      g_WL_StreamContent := currentContent
-      if (g_WL_ResultCtrl != "") {
-        try g_WL_ResultCtrl.Value := currentContent
+    curSize := 0
+    try curSize := FileGetSize(g_WL_StreamFile)
+    
+    ; 性能优化: 仅在文件被 curl 追加了新内容时，才触发磁盘读取和高昂的 JSON 字符串解析操作
+    if (curSize != g_WL_StreamFileSize) {
+      g_WL_StreamFileSize := curSize
+
+      ; 实时读取流式内容并更新浮窗
+      currentContent := WL_ReadStreamContent(g_WL_StreamFile)
+      if (currentContent != "" && currentContent != g_WL_StreamContent) {
+        g_WL_StreamContent := currentContent
+        if (g_WL_ResultCtrl != "") {
+          try g_WL_ResultCtrl.Value := currentContent
+        }
       }
     }
 
