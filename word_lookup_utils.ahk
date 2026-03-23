@@ -18,6 +18,63 @@ WL_WM_LBUTTONDOWN(wParam, lParam, msg, hwnd)
     }
 }
 
+; ===== 拦截上下文菜单（阻止默认的系统文本框右键菜单） =====
+WL_WM_CONTEXTMENU(wParam, lParam, msg, hwnd)
+{
+    global g_WL_Gui
+    if (g_WL_Gui != "") {
+        isOurGui := false
+        if (hwnd == g_WL_Gui.Hwnd || wParam == g_WL_Gui.Hwnd) {
+            isOurGui := true
+        } else {
+            try {
+                ctrl := GuiCtrlFromHwnd(hwnd)
+                if (ctrl && ctrl.Gui && ctrl.Gui.Hwnd == g_WL_Gui.Hwnd)
+                    isOurGui := true
+                ctrlW := GuiCtrlFromHwnd(wParam)
+                if (ctrlW && ctrlW.Gui && ctrlW.Gui.Hwnd == g_WL_Gui.Hwnd)
+                    isOurGui := true
+            }
+        }
+        if (!isOurGui && WinActive("ahk_id " . g_WL_Gui.Hwnd)) {
+            isOurGui := true
+        }
+
+        if (isOurGui) {
+            global g_WL_InitMouseX, g_WL_InitMouseY, g_WL_MouseMoved, g_WL_ShowTick
+            WL_PlayTtsOnce()
+            CoordMode("Mouse", "Screen")
+            MouseGetPos(&g_WL_InitMouseX, &g_WL_InitMouseY)
+            g_WL_MouseMoved := false
+            g_WL_ShowTick := A_TickCount
+            return 0
+        }
+    }
+}
+
+; ===== 拦截底层 Edit 控件的右键按下和抬起，防止其私自呼出菜单 =====
+WL_WM_RBUTTON(wParam, lParam, msg, hwnd)
+{
+    global g_WL_Gui
+    if (g_WL_Gui != "") {
+        try {
+            ctrl := GuiCtrlFromHwnd(hwnd)
+            ; 若目标是我们查词窗口内的控件
+            if (ctrl && ctrl.Gui && ctrl.Gui.Hwnd == g_WL_Gui.Hwnd) {
+                if (msg == 0x0205) { ; WM_RBUTTONUP
+                    global g_WL_InitMouseX, g_WL_InitMouseY, g_WL_MouseMoved, g_WL_ShowTick
+                    WL_PlayTtsOnce()
+                    CoordMode("Mouse", "Screen")
+                    MouseGetPos(&g_WL_InitMouseX, &g_WL_InitMouseY)
+                    g_WL_MouseMoved := false
+                    g_WL_ShowTick := A_TickCount
+                }
+                return 0 ; 让控件彻底忽略右键事件
+            }
+        }
+    }
+}
+
 ; ===== 关闭浮窗 =====
 CloseWordGui()
 {
@@ -378,25 +435,43 @@ WL_CheckAnkiStatus(word) {
     
     try {
         http := ComObject("WinHttp.WinHttpRequest.5.1")
-        http.Open("POST", "http://127.0.0.1:8765", false)
+        http.Open("POST", "http://127.0.0.1:8765", true) ; 改用异步模式（true），不阻塞主线程
         http.SetTimeouts(1000, 1000, 1000, 1000)
         http.SetRequestHeader("Content-Type", "application/json; charset=utf-8")
         http.Send(payload)
-        http.WaitForResponse()
-        res := http.ResponseText
         
-        ; HTTP 请求期间 GUI 可能已关闭，再次检查
-        if (!g_WL_AnkiBtn || !g_WL_Gui)
-            return
-        
-        if (RegExMatch(res, '"result":\s*\[(.*?)\]', &m)) {
-            ids := Trim(m[1])
-            if (ids != "") {
-                try g_WL_AnkiBtn.Text := "➖ Anki"
-                try g_WL_AnkiBtn.SetFont("c008800 Norm")
-                return
+        ; 使用闭包和定时器来轮询异步请求状态，不卡界面
+        CheckAnkiState() {
+            try {
+                if (http.ReadyState != 4)
+                    return ; 还没请求完，下次继续查
+                
+                SetTimer(, 0) ; 请求结束，关掉当前定时器
+                
+                global g_WL_AnkiBtn, g_WL_Gui
+                if (!g_WL_AnkiBtn || !g_WL_Gui)
+                    return
+                    
+                res := http.ResponseText
+                if (RegExMatch(res, '"result":\s*\[(.*?)\]', &m)) {
+                    ids := Trim(m[1])
+                    if (ids != "") {
+                        try g_WL_AnkiBtn.Text := "➖ Anki"
+                        try g_WL_AnkiBtn.SetFont("c008800 Norm")
+                        return
+                    }
+                }
+                try g_WL_AnkiBtn.Text := "➕ Anki"
+                try g_WL_AnkiBtn.SetFont("c333333 Norm")
+            } catch {
+                try SetTimer(, 0)
+                global g_WL_AnkiBtn
+                try g_WL_AnkiBtn.Text := "➕ Anki"
+                try g_WL_AnkiBtn.SetFont("c333333 Norm")
             }
         }
+        
+        SetTimer(CheckAnkiState, 50)
     } catch {
         ; 忽略连接失败或控件已销毁
         return

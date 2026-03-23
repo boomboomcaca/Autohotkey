@@ -72,6 +72,11 @@ InitPrompts()
 
 ; 注册窗口拖动事件
 OnMessage(0x0201, WL_WM_LBUTTONDOWN)
+; 注册上下文菜单事件拦截（防止Edit控件在触摸板或触屏等情况下弹出右键菜单）
+OnMessage(0x007B, WL_WM_CONTEXTMENU)
+; 拦截控件私自处理右键事件（彻底切断右键触发系统菜单的可能）
+OnMessage(0x0204, WL_WM_RBUTTON) ; WM_RBUTTONDOWN
+OnMessage(0x0205, WL_WM_RBUTTON) ; WM_RBUTTONUP
 
 ; ===== 快捷键 F2 =====
 F2::
