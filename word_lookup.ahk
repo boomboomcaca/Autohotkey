@@ -668,7 +668,7 @@ StartWordOllamaRequest(word, context, isNavigating := false)
     if (context != "" && context != word)
       prompt .= " Please explain its meaning in the following context:\nContext: " . context
 
-    prompt .= "\n\nPlease output using the following format (plain text only):\n● Part of Speech: xxx /American English IPA/ (phonetics is REQUIRED, always provide American English IPA)\n● Word Roots: [Break down prefixes, roots, suffixes with origins and meanings]\n● Definition: [Simple English definition]\n● Context Meaning: [Explanation based on the given context]\n● Collocations: [Common collocations or examples]"
+    prompt .= "\n\nPlease output using the following format (plain text only):\n● Part of Speech: xxx /American English IPA/ (phonetics is REQUIRED, always provide American English IPA)\n● Word Roots: [One-line brief breakdown, e.g. pre-(before) + dict(speak) + -ion(noun suffix)]\n● Definition: [Simple English definition]\n● Context Meaning: [Explanation based on the given context]\n● Collocations: [Common collocations or examples]"
     
     sysPrompt := "Output ONLY in English. Use plain text without Markdown formatting. Keep explanations concise."
   } else {
@@ -679,7 +679,7 @@ StartWordOllamaRequest(word, context, isNavigating := false)
     else
       prompt .= " 的含义。"
 
-    prompt .= "\n\n请用以下格式输出（纯文本）：\n● 词性：xxx /美式音标/（音标为必填项，必须给出美式英语 IPA 音标）\n● 词根拆解：拆分前缀、词根、后缀，标注来源并必须用中文解释其含义\n● 释义：xxx\n● 语境释义：在这个句子中表示...\n● 常见搭配：xxx"
+    prompt .= "\n\n请用以下格式输出（纯文本）：\n● 词性：xxx /美式音标/（音标为必填项，必须给出美式英语 IPA 音标）\n● 词根拆解：用一行简洁列出，格式如 pre-(前缀,'之前') + dict(词根,'说') + -ion(后缀,名词)\n● 释义：xxx\n● 语境释义：在这个句子中表示...\n● 常见搭配：xxx"
     
     sysPrompt := "你必须全程使用中文进行解释说明（包括词根的含义也必须翻译为中文，不要夹杂英文解释）。纯文本输出，不要用任何符号（如反斜杠、星号、井号）包裹或强调单词。简洁回答。"
   }
