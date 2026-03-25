@@ -628,10 +628,13 @@ WL_ToggleLang()
 }
 
 ; ===== 发起 Ollama 语境解释请求 =====
-StartWordOllamaRequest(word, context, isNavigating := false)
+StartWordOllamaRequest(word, context, isNavigating := false, isRetry := false)
 {
   global g_WL_StreamFile, g_WL_StreamPid, g_WL_Pending, g_WL_StreamContent, g_WL_LangMode
-  global g_WL_History, g_WL_HistoryIdx
+  global g_WL_History, g_WL_HistoryIdx, g_WL_RetryCount
+
+  if (!isRetry)
+    g_WL_RetryCount := 0
 
   WL_CheckAnkiStatus(word)
 
@@ -713,9 +716,11 @@ StartWordOllamaRequest(word, context, isNavigating := false)
 
   ; 使用 curl.exe 调用 Mistral API
   try {
-    curlCmd := 'curl.exe -s -N --connect-timeout 10 -m 10 -X POST "' . g_MistralEndpoint . '" -H "Content-Type: application/json" -H "Authorization: Bearer ' . g_MistralApiKey . '" -d "@' . jsonFile . '" -o "' . g_WL_StreamFile . '"'
+    curlCmd := 'curl.exe -s -N --connect-timeout 10 -m 60 -X POST "' . g_MistralEndpoint . '" -H "Content-Type: application/json" -H "Authorization: Bearer ' . g_MistralApiKey . '" -d "@' . jsonFile . '" -o "' . g_WL_StreamFile . '"'
     Run(curlCmd, , "Hide", &outPid)
     g_WL_StreamPid := outPid
+    global g_WL_StartTick
+    g_WL_StartTick := A_TickCount
   } catch {
     return
   }
@@ -728,14 +733,28 @@ StartWordOllamaRequest(word, context, isNavigating := false)
 CheckWordResult()
 {
   global g_WL_Pending, g_WL_StreamFile, g_WL_StreamContent, g_WL_StreamPid, g_WL_StreamFileSize
-  global g_WL_ResultCtrl, g_WL_Gui
+  global g_WL_ResultCtrl, g_WL_Gui, g_WL_StartTick, g_WL_LangMode
 
   if (!g_WL_Pending || g_WL_Gui = "") {
     SetTimer(CheckWordResult, 0)
     return
   }
 
-  if (g_WL_StreamFile != "" && FileExist(g_WL_StreamFile)) {
+  isComplete := false
+  isTimeout := false
+
+  ; 检查 curl 进程是否结束
+  if (g_WL_StreamPid > 0 && !ProcessExist(g_WL_StreamPid)) {
+    isComplete := true
+  }
+
+  ; 安全兜底：检查全局超时 (10 秒自动重试)
+  if (A_TickCount - g_WL_StartTick > 10000) {
+    isComplete := true
+    isTimeout := true
+  }
+
+  if (!isComplete && g_WL_StreamFile != "" && FileExist(g_WL_StreamFile)) {
     curSize := 0
     try curSize := FileGetSize(g_WL_StreamFile)
     
@@ -752,41 +771,65 @@ CheckWordResult()
         }
       }
     }
+  }
 
-    ; 检查 curl 进程是否结束
-    isComplete := false
-    if (g_WL_StreamPid > 0 && !ProcessExist(g_WL_StreamPid)) {
-      isComplete := true
+  if (isComplete) {
+    if (isTimeout && g_WL_StreamPid > 0) {
+      try ProcessClose(g_WL_StreamPid)
     }
 
-    if (isComplete) {
-      Sleep(30) ; 等待文件最终刷入硬盘
+    Sleep(30) ; 等待文件最终刷入硬盘
+    finalResult := ""
+    if (g_WL_StreamFile != "" && FileExist(g_WL_StreamFile)) {
       finalResult := WL_ReadStreamContent(g_WL_StreamFile)
-      if (finalResult != "") {
-        finalResult := StripEmoji(finalResult) ; 仅最终结果时过滤一次 Emoji
-        if (g_WL_ResultCtrl != "") {
-          try g_WL_ResultCtrl.Value := finalResult
-        }
-        global g_WL_History, g_WL_HistoryIdx
-        if (g_WL_HistoryIdx > 0 && g_WL_HistoryIdx <= g_WL_History.Length) {
-          g_WL_History[g_WL_HistoryIdx].result := finalResult
-        }
-      } else {
-        ; AI 无响应或请求超时，显示错误提示
-        if (g_WL_ResultCtrl != "") {
-          try g_WL_ResultCtrl.Value := (g_WL_LangMode = "EN" ? "⚠ Request timed out. Please check your network or try again." : "⚠ 请求超时，请检查网络连接后重试。")
-        }
-      }
-      
-      ; 状态重置与收尾清理
-      g_WL_Pending := false
-      g_WL_StreamPid := 0
-      SetTimer(CheckWordResult, 0)
-      
-      ; 阅后即焚，清理临时文件
-      try FileDelete(g_WL_StreamFile)
-      try FileDelete(A_Temp . "\ahk_wl_request_word.json")
     }
+
+    if (finalResult != "") {
+      finalResult := StripEmoji(finalResult) ; 仅最终结果时过滤一次 Emoji
+      if (g_WL_ResultCtrl != "") {
+        try g_WL_ResultCtrl.Value := finalResult
+      }
+      global g_WL_History, g_WL_HistoryIdx
+      if (g_WL_HistoryIdx > 0 && g_WL_HistoryIdx <= g_WL_History.Length) {
+        g_WL_History[g_WL_HistoryIdx].result := finalResult
+      }
+    } else {
+      global g_WL_RetryCount, WL_CurrentWord, WL_CurrentContext
+      ; AI 无响应或请求超时，如果在 10 秒超时并且是初次超时，执行自动重试一次
+      if (isTimeout && g_WL_RetryCount < 1) {
+        g_WL_RetryCount++
+        if (g_WL_ResultCtrl != "") {
+          msg := (g_WL_LangMode = "EN" ? "⏱ Timeout... Retrying (" . g_WL_RetryCount . "/1)..." : "⏱ 查询缓慢... 正在自动重试 (" . g_WL_RetryCount . "/1)...")
+          try g_WL_ResultCtrl.Value := msg
+        }
+        
+        g_WL_Pending := false
+        g_WL_StreamPid := 0
+        SetTimer(CheckWordResult, 0)
+        try FileDelete(g_WL_StreamFile)
+        try FileDelete(A_Temp . "\ahk_wl_request_word.json")
+        
+        StartWordOllamaRequest(WL_CurrentWord, WL_CurrentContext, false, true)
+        return
+      }
+
+      ; 如果不是超时或者重试依然失败，则显示彻底失败提示
+      if (g_WL_ResultCtrl != "") {
+        msg := isTimeout ? "⚠ Request timed out (>10s)." : "⚠ Connection failed or timed out."
+        if (g_WL_LangMode != "EN")
+          msg := isTimeout ? "⚠ 请求连续超时，请检查网络。" : "⚠ 请求失败或超时，请检查网络连接。"
+        try g_WL_ResultCtrl.Value := msg
+      }
+    }
+    
+    ; 状态重置与收尾清理
+    g_WL_Pending := false
+    g_WL_StreamPid := 0
+    SetTimer(CheckWordResult, 0)
+    
+    ; 阅后即焚，清理临时文件
+    try FileDelete(g_WL_StreamFile)
+    try FileDelete(A_Temp . "\ahk_wl_request_word.json")
   }
 }
 

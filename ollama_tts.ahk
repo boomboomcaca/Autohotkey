@@ -3,6 +3,10 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 global g_TtsProcPid := 0  ; 用于跟踪 edge-tts 进程
+global g_TtsProcStartTick := 0
+global g_TtsPlayText := ""
+global g_TtsTempFile := ""
+global g_HoverTtsStartTick := 0
 
 Gui_PlayOriginal(*)
 {
@@ -43,10 +47,13 @@ RestorePrevForeground()
 }
 
 ; 核心朗读函数：支持中英自动识别
-PlayTtsText(text)
+PlayTtsText(text, isRetry := false)
 {
-  global g_TtsProcPid
+  global g_TtsProcPid, g_TtsRetryCount
   static tempFile := A_Temp . "\ahk_tts_edge.mp3"
+  
+  if (!isRetry)
+    g_TtsRetryCount := 0
   
   text := Trim(text)
   if (text = "" || InStr(text, "正在") || InStr(text, "切换后"))
@@ -72,17 +79,49 @@ PlayTtsText(text)
   escapedText := StrReplace(escapedText, '`r', '')
 
   try {
-    ; 使用 Run 代替 RunWait 以捕获 PID 并允许在生成过程中被 StopTts 强行终止
+    ; 使用非阻塞启动，并通过定时器轮询检测结束
     Run('edge-tts --voice ' . voice . ' --text "' . escapedText . '" --write-media "' . tempFile . '"', , "Hide", &outPid)
     g_TtsProcPid := outPid
     
-    ; 等待音频生成完成
-    ProcessWaitClose(outPid)
+    g_TtsProcStartTick := A_TickCount
+    g_TtsPlayText := text
+    g_TtsTempFile := tempFile
     
-    if (FileExist(tempFile) && !InStr(text, "正在") && !InStr(text, "切换后"))
-      SoundPlay(tempFile)
+    SetTimer(PollTtsPlay, 100)
   } catch Error as e {
     ; 静默失败
+  }
+}
+
+PollTtsPlay()
+{
+  global g_TtsProcPid, g_TtsProcStartTick, g_TtsPlayText, g_TtsTempFile
+  
+  if (g_TtsProcPid <= 0) {
+    SetTimer(PollTtsPlay, 0)
+    return
+  }
+  
+  ; 超时保护 (10秒)，超时自动重试一次
+  if (A_TickCount - g_TtsProcStartTick > 10000) {
+    try ProcessClose(g_TtsProcPid)
+    g_TtsProcPid := 0
+    SetTimer(PollTtsPlay, 0)
+    
+    global g_TtsRetryCount, g_TtsPlayText
+    if (g_TtsRetryCount < 1) {
+      g_TtsRetryCount++
+      PlayTtsText(g_TtsPlayText, true)
+    }
+    return
+  }
+  
+  if (!ProcessExist(g_TtsProcPid)) {
+    SetTimer(PollTtsPlay, 0)
+    g_TtsProcPid := 0
+    if (FileExist(g_TtsTempFile) && !InStr(g_TtsPlayText, "正在") && !InStr(g_TtsPlayText, "切换后")) {
+      SoundPlay(g_TtsTempFile) ; 异步非阻塞播放音频
+    }
   }
 }
 
@@ -152,12 +191,15 @@ StopTts()
   g_TtsProcPid := 0
 }
 
-PlayTtsLoop()
+PlayTtsLoop(isRetry := false)
 {
-  global g_TtsPlaying, g_HoverTarget, g_TtsProcPid
+  global g_TtsPlaying, g_HoverTarget, g_TtsProcPid, g_HoverTtsRetryCount
   global g_OrigEditCtrl, g_CorrectEditCtrl, g_TranslateEditCtrl, g_QuestionEditCtrl
   static lastText := ""  ; 用于缓存上一次处理的文字
   static tempFile := A_Temp . "\ahk_tts_hover.mp3"
+
+  if (!isRetry)
+    g_HoverTtsRetryCount := 0
 
   if (!g_TtsPlaying || g_HoverTarget = "") {
     lastText := "" ; 清空缓存，下次进入重新生成
@@ -182,26 +224,58 @@ PlayTtsLoop()
   voice := isChinese ? "zh-CN-XiaoxiaoNeural" : "en-US-AriaNeural"
   
   try {
-    ; 核心优化：如果文字没变且文件存在，则不重新生成
-    if (text != lastText || !FileExist(tempFile)) {
+    ; 核心优化：如果文字没变且文件存在，则不重新生成 (如果是重试则强制重新生成)
+    if (text != lastText || !FileExist(tempFile) || isRetry) {
         escapedText := StrReplace(text, '"', '\"')
         escapedText := StrReplace(escapedText, '`n', ' ')
         
-        ; 生成音频
+        ; 异步非阻塞生成音频
         Run('edge-tts --voice ' . voice . ' --text "' . escapedText . '" --write-media "' . tempFile . '"', , "Hide", &outPid)
         g_TtsProcPid := outPid
-        ProcessWaitClose(outPid)
         lastText := text
-    }
-    
-    if (g_TtsPlaying && FileExist(tempFile)) {
-      SoundPlay(tempFile, "Wait")
-      
-      ; 播放完毕后如果还在悬停，循环播放
-      if (g_TtsPlaying)
-        SetTimer(PlayTtsLoop, -300) ; 将间隔从 300ms 缩短到 100ms
+        
+        global g_HoverTtsStartTick
+        g_HoverTtsStartTick := A_TickCount
+        SetTimer(PollHoverTtsPlay, 100)
+    } else {
+        ; 文件已存在且还是原文本，直接采用非阻塞方式播放一次
+        if (g_TtsPlaying && FileExist(tempFile)) {
+            SoundPlay(tempFile)
+        }
     }
   } catch {
+  }
+}
+
+PollHoverTtsPlay()
+{
+  global g_TtsProcPid, g_HoverTtsStartTick, g_TtsPlaying
+  static tempFile := A_Temp . "\ahk_tts_hover.mp3"
+
+  if (g_TtsProcPid <= 0 || !g_TtsPlaying) {
+    SetTimer(PollHoverTtsPlay, 0)
+    return
+  }
+
+  if (A_TickCount - g_HoverTtsStartTick > 10000) {
+    try ProcessClose(g_TtsProcPid)
+    g_TtsProcPid := 0
+    SetTimer(PollHoverTtsPlay, 0)
+
+    global g_HoverTtsRetryCount
+    if (g_HoverTtsRetryCount < 1) {
+      g_HoverTtsRetryCount++
+      PlayTtsLoop(true)
+    }
+    return
+  }
+
+  if (!ProcessExist(g_TtsProcPid)) {
+    SetTimer(PollHoverTtsPlay, 0)
+    g_TtsProcPid := 0
+    if (g_TtsPlaying && FileExist(tempFile)) {
+      SoundPlay(tempFile)
+    }
   }
 }
 
