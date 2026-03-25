@@ -270,6 +270,9 @@ F2::
     return
   }
 
+  ; OCR 后处理：修正等宽字体下常见的字符混淆 (l↔1, O↔0)
+  word := FixOcrConfusion(word)
+
   ShowWordPopup(word, line, mouseX, mouseY)
 }
 
@@ -710,7 +713,7 @@ StartWordOllamaRequest(word, context, isNavigating := false)
 
   ; 使用 curl.exe 调用 Mistral API
   try {
-    curlCmd := 'curl.exe -s -N -X POST "' . g_MistralEndpoint . '" -H "Content-Type: application/json" -H "Authorization: Bearer ' . g_MistralApiKey . '" -d "@' . jsonFile . '" -o "' . g_WL_StreamFile . '"'
+    curlCmd := 'curl.exe -s -N --connect-timeout 10 -m 10 -X POST "' . g_MistralEndpoint . '" -H "Content-Type: application/json" -H "Authorization: Bearer ' . g_MistralApiKey . '" -d "@' . jsonFile . '" -o "' . g_WL_StreamFile . '"'
     Run(curlCmd, , "Hide", &outPid)
     g_WL_StreamPid := outPid
   } catch {
@@ -767,6 +770,11 @@ CheckWordResult()
         global g_WL_History, g_WL_HistoryIdx
         if (g_WL_HistoryIdx > 0 && g_WL_HistoryIdx <= g_WL_History.Length) {
           g_WL_History[g_WL_HistoryIdx].result := finalResult
+        }
+      } else {
+        ; AI 无响应或请求超时，显示错误提示
+        if (g_WL_ResultCtrl != "") {
+          try g_WL_ResultCtrl.Value := (g_WL_LangMode = "EN" ? "⚠ Request timed out. Please check your network or try again." : "⚠ 请求超时，请检查网络连接后重试。")
         }
       }
       

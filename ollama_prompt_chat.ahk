@@ -404,6 +404,8 @@ StartChatAsync(question)
     http.Send(json)
     g_HttpChat := http ; 记录对象用于轮询
     g_ChatPending := true
+    global g_ChatStartTick
+    g_ChatStartTick := A_TickCount ; 记录请求开始时间，用于超时检测
   } catch Error as e {
     g_AnswerEditCtrl.Value := "请求启动失败: " . e.Message
     g_SendBtnCtrl.Enabled := true
@@ -427,6 +429,20 @@ CheckChatResult()
     return
   }
   
+  ; 超时检测 (10 秒)
+  global g_ChatStartTick
+  if (A_TickCount - g_ChatStartTick > 10000) {
+    try g_HttpChat.Abort()
+    g_HttpChat := ""
+    g_ChatPending := false
+    if (g_AnswerEditCtrl != "")
+      try g_AnswerEditCtrl.Value := "⚠ 请求超时，请检查网络连接后重试。"
+    if (g_SendBtnCtrl != "")
+      g_SendBtnCtrl.Enabled := true
+    SetTimer(CheckChatResult, 0)
+    return
+  }
+
   ; 检查状态 (3=Receiving, 4=Complete)
   if (g_HttpChat.readyState >= 3) {
     try {

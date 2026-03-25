@@ -1,3 +1,41 @@
+; ===== OCR 字符混淆修正 =====
+; 等宽/代码字体下 OCR 容易把 l↔1、o↔0 混淆
+; 策略：根据相邻字母的大小写语境决定修正目标
+FixOcrConfusion(word)
+{
+    ; 纯数字不修正
+    if RegExMatch(word, "^\d+$")
+        return word
+
+    result := ""
+    len := StrLen(word)
+    Loop len {
+        ch := SubStr(word, A_Index, 1)
+        prev := A_Index > 1 ? SubStr(word, A_Index - 1, 1) : ""
+        next := A_Index < len ? SubStr(word, A_Index + 1, 1) : ""
+        prevIsLetter := RegExMatch(prev, "[a-zA-Z]")
+        nextIsLetter := RegExMatch(next, "[a-zA-Z]")
+
+        if (ch = "1" && prevIsLetter && nextIsLetter) {
+            ; 1 夹在字母间 → l 或 I
+            ; 前后都是大写 → I (如 F1LE → FILE)，否则 → l (如 fi1e → file)
+            prevIsUpper := RegExMatch(prev, "[A-Z]")
+            nextIsUpper := RegExMatch(next, "[A-Z]")
+            result .= (prevIsUpper && nextIsUpper) ? "I" : "l"
+        } else if (ch = "0" && prevIsLetter && nextIsLetter) {
+            ; 0 夹在字母间 → o 或 O
+            ; 前后都是大写 → O (如 B0OK → BOOK)，否则 → o (如 b0ok → book)
+            prevIsUpper := RegExMatch(prev, "[A-Z]")
+            nextIsUpper := RegExMatch(next, "[A-Z]")
+            result .= (prevIsUpper && nextIsUpper) ? "O" : "o"
+        } else {
+            result .= ch
+        }
+    }
+
+    return result
+}
+
 ; ===== 切换图钉状态 =====
 WL_TogglePin()
 {
