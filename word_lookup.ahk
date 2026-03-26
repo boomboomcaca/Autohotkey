@@ -112,16 +112,39 @@ F2::
           ; --- 优化：尝试获取 UIA 上下文（增加上下各一行） ---
           try {
               p_prev := lineRange.Clone()
-              p_prev.Move(UIA.TextUnit.Paragraph, -1)
-              txt_prev := Trim(p_prev.GetText())
-              if (txt_prev != "" && txt_prev != rawLine)
-                  rawLine := txt_prev . " " . rawLine
+              if (p_prev.Move(UIA.TextUnit.Paragraph, -1) != 0) {
+                  p_prev.ExpandToEnclosingUnit(UIA.TextUnit.Paragraph)
+                  txt_prev := Trim(p_prev.GetText())
+                  if (txt_prev != "" && txt_prev != rawLine)
+                      rawLine := txt_prev . " " . rawLine
+              }
                   
               p_next := lineRange.Clone()
-              p_next.Move(UIA.TextUnit.Paragraph, 1)
-              txt_next := Trim(p_next.GetText())
-              if (txt_next != "" && txt_next != rawLine && !InStr(rawLine, txt_next))
-                  rawLine := rawLine . " " . txt_next
+              if (p_next.Move(UIA.TextUnit.Paragraph, 1) != 0) {
+                  p_next.ExpandToEnclosingUnit(UIA.TextUnit.Paragraph)
+                  txt_next := Trim(p_next.GetText())
+                  if (txt_next != "" && txt_next != rawLine && !InStr(rawLine, txt_next))
+                      rawLine := rawLine . " " . txt_next
+              }
+          }
+          ; ----------------------------------------------
+
+          ; --- 如果段落上下文不足（仅含单词本身），从父元素回溯获取完整文本 ---
+          if (rawLine = rawWord || StrLen(rawLine) <= StrLen(rawWord) + 5) {
+              try {
+                  ancestor := el
+                  Loop 5 {
+                      ancestor := ancestor.Parent
+                      if (!ancestor)
+                          break
+                      ancestorText := ""
+                      try ancestorText := Trim(ancestor.Name)
+                      if (ancestorText != "" && StrLen(ancestorText) > StrLen(rawWord) + 5 && InStr(ancestorText, rawWord)) {
+                          rawLine := RegExReplace(ancestorText, "s)[\r\n]+", " ")
+                          break
+                      }
+                  }
+              }
           }
           ; ----------------------------------------------
 
