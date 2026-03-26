@@ -456,70 +456,61 @@ WL_CheckAnkiStatus(word) {
     if (!g_WL_AnkiBtn || !g_WL_Gui) {
         return
     }
-        
-    deckName := "英语生词"
-    try deckName := IniRead(A_ScriptDir . "\ollama_config.ini", "Anki", "DeckName")
-    if (InStr(deckName, "闁") || InStr(deckName, "ue1be")) {
-        deckName := "英语生词"
-    }
 
-    frontField := "正面"
-    try frontField := IniRead(A_ScriptDir . "\ollama_config.ini", "Anki", "FrontField")
-
-    escapeWord := StrReplace(StrReplace(word, "\", "\\"), "`"", "\`"")
-    query := 'deck:"' . deckName . '" ' . frontField . ':re:<h2>' . escapeWord . '</h2>'
-    jsonQuery := StrReplace(query, '"', '\"')
-    payload := '{"action": "findNotes", "version": 6, "params": {"query": "' . jsonQuery . '"}}'
-    
-    try {
-        http := ComObject("WinHttp.WinHttpRequest.5.1")
-        http.Open("POST", "http://127.0.0.1:8765", true) ; 改用异步模式（true），不阻塞主线程
-        http.SetTimeouts(1000, 1000, 1000, 1000)
-        http.SetRequestHeader("Content-Type", "application/json; charset=utf-8")
-        http.Send(payload)
-        
-        ; 使用闭包和定时器来轮询异步请求状态，不卡界面
-        CheckAnkiState() {
-            try {
-                if (http.ReadyState != 4)
-                    return ; 还没请求完，下次继续查
-                
-                SetTimer(, 0) ; 请求结束，关掉当前定时器
-                
-                global g_WL_AnkiBtn, g_WL_Gui
-                if (!g_WL_AnkiBtn || !g_WL_Gui) {
-                    http := ""
-                    return
-                }
-                    
-                res := http.ResponseText
-                http := "" ; 释放 COM 对象
-                
-                if (RegExMatch(res, '"result":\s*\[(.*?)\]', &m)) {
-                    ids := Trim(m[1])
-                    if (ids != "") {
-                        try g_WL_AnkiBtn.Text := "➖ Anki"
-                        try g_WL_AnkiBtn.SetFont("c008800 Norm")
-                        return
-                    }
-                }
-                try g_WL_AnkiBtn.Text := "➕ Anki"
-                try g_WL_AnkiBtn.SetFont("c333333 Norm")
-            } catch {
-                try SetTimer(, 0)
-                global g_WL_AnkiBtn
-                try g_WL_AnkiBtn.Text := "➕ Anki"
-                try g_WL_AnkiBtn.SetFont("c333333 Norm")
-                http := "" ; 发生异常时也释放
-            }
-        }
-        
-        SetTimer(CheckAnkiState, 50)
-    } catch {
-        ; 忽略连接失败或控件已销毁
-        return
-    }
+    ; 默认显示为未收藏
     try g_WL_AnkiBtn.Text := "➕ Anki"
     try g_WL_AnkiBtn.SetFont("c333333 Norm")
+
+    ; 使用单次定时器延迟执行同步请求，避免阻塞 GUI 初始渲染
+    ; （本地 AnkiConnect 请求通常 <50ms，不会卡界面）
+    checkWord := word
+    AnkiSyncCheck() {
+        SetTimer(, 0) ; 确保只执行一次
+        global g_WL_AnkiBtn, g_WL_Gui
+        if (!g_WL_AnkiBtn || !g_WL_Gui)
+            return
+
+        try {
+            deckName := "英语生词"
+            try deckName := IniRead(A_ScriptDir . "\ollama_config.ini", "Anki", "DeckName")
+            if (InStr(deckName, "闁") || InStr(deckName, "ue1be")) {
+                deckName := "英语生词"
+            }
+
+            frontField := "正面"
+            try frontField := IniRead(A_ScriptDir . "\ollama_config.ini", "Anki", "FrontField")
+
+            escapeWord := StrReplace(StrReplace(checkWord, "\", "\\"), "`"", "\`"")
+            query := 'deck:"' . deckName . '" ' . frontField . ':re:<h2>' . escapeWord . '</h2>'
+            jsonQuery := StrReplace(query, '"', '\"')
+            payload := '{"action": "findNotes", "version": 6, "params": {"query": "' . jsonQuery . '"}}'
+
+            http := ComObject("WinHttp.WinHttpRequest.5.1")
+            http.Open("POST", "http://127.0.0.1:8765", false) ; 同步模式，可靠获取结果
+            http.SetTimeouts(2000, 2000, 2000, 2000)
+            http.SetRequestHeader("Content-Type", "application/json; charset=utf-8")
+            http.Send(payload)
+            http.WaitForResponse()
+
+            res := http.ResponseText
+            http := ""
+
+            if (!g_WL_AnkiBtn || !g_WL_Gui)
+                return
+
+            if (RegExMatch(res, '"result":\s*\[(.*?)\]', &m)) {
+                ids := Trim(m[1])
+                if (ids != "") {
+                    try g_WL_AnkiBtn.Text := "➖ Anki"
+                    try g_WL_AnkiBtn.SetFont("c008800 Norm")
+                    return
+                }
+            }
+        } catch {
+            ; AnkiConnect 未运行或连接失败，保持默认 ➕ 状态
+        }
+    }
+
+    SetTimer(AnkiSyncCheck, -1) ; 负数 = 单次触发，延迟 1ms 后执行
 }
 
