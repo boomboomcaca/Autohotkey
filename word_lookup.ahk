@@ -137,12 +137,22 @@ F2::
       }
       if (!found && el.Name != "") {
         rawName := Trim(el.Name)
-        ; [Fix] 过滤浏览器自带的图片辅助说明或通用占位文本 (如 "要获取缺失的图片说明...", "Logo", "Icon" 等)
-        ; 只要 UIA 的 TextPattern 没抓到真实文本，且 Name 是这类通用标签，就跳过并回退到 OCR
+        
+        ; [核心修复] 基于 UIA ControlType 判断元素是否为文本类型
+        ; 非文本类型 (Image/Group/Pane/Custom/Button 等) 的 Name 通常是无障碍辅助标签，不是用户看到的真实文字
+        ; 应该跳过，让程序回退到 OCR 识别实际可见内容
+        elType := 0
+        try elType := el.Type
+        
+        ; 定义"可信文本类型"白名单 (只有这些类型的 Name 才可能是用户看到的真实文字)
+        ; Text=50020, Edit=50004, Hyperlink/Link=50005, Document=50030, ListItem=50007, TreeItem=50024, MenuItem=50011, TabItem=50019
+        isTextElement := (elType == 50020 || elType == 50004 || elType == 50005 || elType == 50030 || elType == 50007 || elType == 50024 || elType == 50011 || elType == 50019)
+        
+        ; [安全网] 即使类型匹配，仍保留通用标签黑名单作为二级过滤
         genericLabels := "Logo|Icon|Image|Picture|Graphic|Illustration|Avatar|Banner|SVG|Brand"
-        if (InStr(rawName, "获取缺失的图片说明") || InStr(rawName, "missing image descriptions") || RegExMatch(rawName, "i)^(" . genericLabels . ")$")) {
-           ; 跳过，这通常是浏览器或网页产生的无效 UIA 标签，触发优先级 2 的 OCR 识别画面真实内容
-        } else if (rawName != "" && !RegExMatch(rawName, "\s") && StrLen(rawName) < 50) {
+        isGenericLabel := (InStr(rawName, "获取缺失的图片说明") || InStr(rawName, "missing image descriptions") || RegExMatch(rawName, "i)^(" . genericLabels . ")$"))
+        
+        if (isTextElement && !isGenericLabel && rawName != "" && !RegExMatch(rawName, "\s") && StrLen(rawName) < 50) {
           cleanedWord := RegExReplace(rawName, "^[^\w\x{4e00}-\x{9fa5}\-]+|[^\w\x{4e00}-\x{9fa5}\-]+$", "")
           if (cleanedWord != "") {
             word := cleanedWord
