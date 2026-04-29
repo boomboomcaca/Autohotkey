@@ -255,7 +255,8 @@ RButton::
 
 WL_IsWordGuiShown() {
   global g_WL_Gui
-  return (g_WL_Gui != "")
+  try return (g_WL_Gui != "" && WinExist("ahk_id " . g_WL_Gui.Hwnd))
+  return false
 }
 
 ; ===== 历史记录导航 =====
