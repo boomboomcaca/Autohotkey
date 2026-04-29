@@ -17,6 +17,7 @@ DllCall("SetProcessDpiAwarenessContext", "ptr", -4)
 ;;
 #SingleInstance force
 InstallKeybdHook()
+InstallMouseHook()
 #UseHook
 
 ; The following line is a contribution of NTEmacs wiki http://www49.atwiki.jp/ntemacs/pages/20.html

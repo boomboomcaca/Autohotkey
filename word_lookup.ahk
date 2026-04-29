@@ -489,6 +489,9 @@ ShowWordPopup(word, context, posX, posY)
   Hotkey("^s", (*) => WL_SendToAnki(), "On") ; 新增 Ctrl+S 快捷键发送至 Anki
   HotIfWinActive()
 
+  ; 全局注册右键拦截（不限窗口，查词期间全局生效）
+  Hotkey("RButton", WL_RButtonHandler, "On")
+
   ; 启动鼠标移出关闭的检测定时器
   global g_WL_InitMouseX, g_WL_InitMouseY, g_WL_MouseMoved, g_WL_ShowTick
   CoordMode("Mouse", "Screen")

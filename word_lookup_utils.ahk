@@ -156,6 +156,8 @@ CloseWordGui()
       Hotkey("!Right", "Off")
       HotIfWinActive()
     }
+    ; 注销全局右键拦截
+    try Hotkey("RButton", "Off")
     try g_WL_Gui.Destroy()
     g_WL_Gui := ""
     g_WL_ResultCtrl := ""
@@ -236,9 +238,8 @@ WL_PlayTtsOnce()
   }
 }
 
-; ===== 基于窗口存在的全局右键拦截防止菜单弹出 =====
-#HotIf WL_IsWordGuiShown()
-RButton::
+; ===== 全局右键拦截处理函数（由 Hotkey() 动态注册） =====
+WL_RButtonHandler(*)
 {
   global g_WL_InitMouseX, g_WL_InitMouseY, g_WL_MouseMoved, g_WL_ShowTick
   
@@ -250,13 +251,6 @@ RButton::
   MouseGetPos(&g_WL_InitMouseX, &g_WL_InitMouseY)
   g_WL_MouseMoved := false
   g_WL_ShowTick := A_TickCount
-}
-#HotIf
-
-WL_IsWordGuiShown() {
-  global g_WL_Gui
-  try return (g_WL_Gui != "" && WinExist("ahk_id " . g_WL_Gui.Hwnd))
-  return false
 }
 
 ; ===== 历史记录导航 =====
