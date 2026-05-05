@@ -351,7 +351,7 @@ Gui_SendQuestion(*)
 StartChatAsync(question)
 {
   global g_StreamFileChat, g_StreamPidChat, g_StreamContentChat, g_ChatPending
-  global g_SelectedPrompt, g_HttpChat
+  global g_SelectedPrompt
   global g_MistralApiKey, g_MistralModel, g_MistralEndpoint
   
   ; 终止之前正在运行的 Chat 请求
@@ -395,17 +395,28 @@ StartChatAsync(question)
   ; 构建 JSON (使用流式，OpenAI 格式)
   json := '{"model":"' . g_MistralModel . '","messages":[{"role":"system","content":"' . sysPrompt . '"},{"role":"user","content":"' . prompt . '"}],"temperature":0.7,"max_tokens":2048,"stream":true}'
   
+  ; 使用 curl.exe 调用 API（与 word_lookup 一致，兼容 TUN 代理）
+  g_StreamFileChat := A_Temp . "\ahk_chat_stream.txt"
+  jsonFile := A_Temp . "\ahk_chat_request.json"
+  try FileDelete(g_StreamFileChat)
+  try FileDelete(jsonFile)
+  
   try {
-    ; 使用 Msxml2.XMLHTTP 启动异步流式请求
-    http := ComObject("Msxml2.XMLHTTP")
-    http.Open("POST", g_MistralEndpoint, true)
-    http.SetRequestHeader("Content-Type", "application/json; charset=utf-8")
-    http.SetRequestHeader("Authorization", "Bearer " . g_MistralApiKey)
-    http.Send(json)
-    g_HttpChat := http ; 记录对象用于轮询
+    FileAppend(json, jsonFile, "UTF-8-RAW")
+  } catch {
+    g_AnswerEditCtrl.Value := "请求启动失败: 无法写入临时文件"
+    g_SendBtnCtrl.Enabled := true
+    return
+  }
+  
+  try {
+    curlCmd := 'curl.exe -s -N --connect-timeout 10 -m 120 -X POST "' . g_MistralEndpoint . '" -H "Content-Type: application/json" -H "Authorization: Bearer ' . g_MistralApiKey . '" -d "@' . jsonFile . '" -o "' . g_StreamFileChat . '"'
+    Run(curlCmd, , "Hide", &outPid)
+    g_StreamPidChat := outPid
     g_ChatPending := true
-    global g_ChatStartTick
-    g_ChatStartTick := A_TickCount ; 记录请求开始时间，用于超时检测
+    global g_ChatStartTick, g_ChatStreamFileSize
+    g_ChatStartTick := A_TickCount
+    g_ChatStreamFileSize := 0
   } catch Error as e {
     g_AnswerEditCtrl.Value := "请求启动失败: " . e.Message
     g_SendBtnCtrl.Enabled := true
@@ -418,9 +429,10 @@ StartChatAsync(question)
 
 CheckChatResult()
 {
-  global g_ChatPending, g_HttpChat, g_AnswerEditCtrl, g_SendBtnCtrl, g_StreamContentChat
+  global g_ChatPending, g_AnswerEditCtrl, g_SendBtnCtrl, g_StreamContentChat
+  global g_StreamFileChat, g_StreamPidChat
   
-  if (!g_ChatPending || !IsObject(g_HttpChat))
+  if (!g_ChatPending)
     return
   
   ; 检查控件是否已被销毁
@@ -429,41 +441,110 @@ CheckChatResult()
     return
   }
   
-  ; 超时检测 (10 秒)
-  global g_ChatStartTick
-  if (A_TickCount - g_ChatStartTick > 10000) {
-    try g_HttpChat.Abort()
-    g_HttpChat := ""
-    g_ChatPending := false
-    if (g_AnswerEditCtrl != "")
-      try g_AnswerEditCtrl.Value := "⚠ 请求超时，请检查网络连接后重试。"
-    if (g_SendBtnCtrl != "")
-      g_SendBtnCtrl.Enabled := true
-    SetTimer(CheckChatResult, 0)
-    return
+  isComplete := false
+  isTimeout := false
+  
+  ; 检查 curl 进程是否结束
+  if (g_StreamPidChat > 0 && !ProcessExist(g_StreamPidChat)) {
+    isComplete := true
   }
-
-  ; 检查状态 (3=Receiving, 4=Complete)
-  if (g_HttpChat.readyState >= 3) {
-    try {
-      result := ParseStreamData(g_HttpChat.responseText, &g_StreamContentChat)
-      if (result != "") {
-        ; 实时更新回答框内容
-        g_AnswerEditCtrl.Value := result
+  
+  ; 超时检测 (30 秒)
+  global g_ChatStartTick, g_ChatStreamFileSize
+  if (A_TickCount - g_ChatStartTick > 30000) {
+    isComplete := true
+    isTimeout := true
+  }
+  
+  ; 实时读取流式内容
+  if (!isComplete && g_StreamFileChat != "" && FileExist(g_StreamFileChat)) {
+    curSize := 0
+    try curSize := FileGetSize(g_StreamFileChat)
+    
+    if (curSize != g_ChatStreamFileSize) {
+      g_ChatStreamFileSize := curSize
+      currentContent := Chat_ReadStreamContent(g_StreamFileChat)
+      if (currentContent != "" && currentContent != g_StreamContentChat) {
+        g_StreamContentChat := currentContent
+        if (g_AnswerEditCtrl != "")
+          try g_AnswerEditCtrl.Value := currentContent
       }
     }
+  }
+  
+  if (isComplete) {
+    if (isTimeout && g_StreamPidChat > 0) {
+      try ProcessClose(g_StreamPidChat)
+    }
     
-    ; 如果完成，清理
-    if (g_HttpChat.readyState == 4) {
-      ; 最终结果：执行一次 StripEmoji 过滤
-      if (g_AnswerEditCtrl != "" && g_StreamContentChat != "")
-        try g_AnswerEditCtrl.Value := StripEmoji(g_StreamContentChat)
-      g_ChatPending := false
-      g_SendBtnCtrl.Enabled := true
-      g_HttpChat := ""
-      SetTimer(CheckChatResult, 0)
+    Sleep(30)
+    finalResult := ""
+    if (g_StreamFileChat != "" && FileExist(g_StreamFileChat)) {
+      finalResult := Chat_ReadStreamContent(g_StreamFileChat)
+    }
+    
+    if (finalResult != "") {
+      finalResult := StripEmoji(finalResult)
+      if (g_AnswerEditCtrl != "")
+        try g_AnswerEditCtrl.Value := finalResult
+    } else {
+      if (g_AnswerEditCtrl != "")
+        try g_AnswerEditCtrl.Value := "⚠ 请求超时或失败，请检查网络连接后重试。"
+    }
+    
+    g_ChatPending := false
+    g_StreamPidChat := 0
+    g_SendBtnCtrl.Enabled := true
+    SetTimer(CheckChatResult, 0)
+    
+    ; 清理临时文件
+    try FileDelete(g_StreamFileChat)
+    try FileDelete(A_Temp . "\ahk_chat_request.json")
+  }
+}
+
+Chat_ReadStreamContent(filePath)
+{
+  if (!FileExist(filePath))
+    return ""
+  
+  try {
+    f := FileOpen(filePath, "r", "UTF-8")
+    if (!f)
+      return ""
+    content := f.Read()
+    f.Close()
+  } catch {
+    return ""
+  }
+  
+  ; 解析 OpenAI SSE 流式 JSON
+  result := ""
+  Loop Parse, content, "`n", "`r"
+  {
+    line := Trim(A_LoopField)
+    if (line = "")
+      continue
+    if (SubStr(line, 1, 6) = "data: ")
+      line := SubStr(line, 7)
+    if (line = "[DONE]")
+      continue
+    if (!InStr(line, "{"))
+      continue
+    if RegExMatch(line, '"content"\s*:\s*"((?:[^"\\]|\\.)*)"', &m) {
+      token := m[1]
+      token := StrReplace(token, "\n", "`n")
+      token := StrReplace(token, "\r", "`r")
+      token := StrReplace(token, "\t", "`t")
+      token := StrReplace(token, '\`"', '`"')
+      token := StrReplace(token, "\\\\", "\")
+      result .= token
     }
   }
+  
+  result := Trim(result)
+  result := RegExReplace(result, "(\r?\n\s*){2,}", "`n")
+  return result
 }
 
 ; ===== GUI 事件处理 =====
