@@ -100,21 +100,68 @@ LoadPrompts()
 SavePrompts()
 {
   global g_ConfigFile, g_PromptList, g_SelectedPrompt
-  
-  ; 构建配置文件内容：Settings + Prompts
-  content := "[Settings]`n"
-  content .= "SelectedPrompt=" . g_SelectedPrompt . "`n`n"
-  
+
+  ; 读取现有内容，保留 [Settings]/[Anki] 等所有非 [Prompt_*] 段
+  ; （含 MistralApiKey、MistralModel、MistralEndpoint、WordLookupLang、Anki.* 等键）
+  oldContent := ""
+  if (FileExist(g_ConfigFile)) {
+    try oldContent := FileRead(g_ConfigFile, "UTF-8")
+  }
+
+  preserved := ""
+  inPromptSection := false
+  inSettingsSection := false
+  hasSettingsSection := false
+
+  Loop Parse, oldContent, "`n", "`r" {
+    line := A_LoopField
+    trimmed := Trim(line)
+
+    ; 检测 section 头
+    if (RegExMatch(trimmed, "^\[(.+)\]$", &m)) {
+      sectionName := m[1]
+      inPromptSection := (SubStr(sectionName, 1, 7) = "Prompt_")
+      inSettingsSection := (sectionName = "Settings")
+      if (!inPromptSection) {
+        preserved .= line . "`n"
+        ; 进入 [Settings] 时立刻注入新的 SelectedPrompt，位置稳定
+        if (inSettingsSection) {
+          preserved .= "SelectedPrompt=" . g_SelectedPrompt . "`n"
+          hasSettingsSection := true
+        }
+      }
+      continue
+    }
+
+    ; 丢弃所有 [Prompt_*] 段内容（下面统一重建）
+    if (inPromptSection)
+      continue
+
+    ; 跳过旧的 SelectedPrompt（已在进入 [Settings] 时重写）
+    if (inSettingsSection && RegExMatch(trimmed, "^SelectedPrompt\s*="))
+      continue
+
+    preserved .= line . "`n"
+  }
+
+  ; 文件原本没有 [Settings] 段时，补一个
+  if (!hasSettingsSection)
+    preserved := "[Settings]`nSelectedPrompt=" . g_SelectedPrompt . "`n`n" . preserved
+
+  ; 规范结尾：保证 prompt 段前正好一个空行
+  preserved := RTrim(preserved, " `t`r`n") . "`n`n"
+
+  ; 重写所有 prompt 段
   for item in g_PromptList {
     ; 跳过"无"选项（动态添加的，不需要保存）
     if (item.name = "无")
       continue
-    content .= "[Prompt_" . item.name . "]`n"
-    content .= "prompt=" . item.prompt . "`n`n"
+    preserved .= "[Prompt_" . item.name . "]`n"
+    preserved .= "prompt=" . item.prompt . "`n`n"
   }
-  
+
   try FileDelete(g_ConfigFile)
-  FileAppend(content, g_ConfigFile, "UTF-8-RAW")
+  FileAppend(preserved, g_ConfigFile, "UTF-8-RAW")
 }
 
 GetPromptByName(name)
