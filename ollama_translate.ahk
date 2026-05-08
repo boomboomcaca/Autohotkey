@@ -443,7 +443,9 @@ UpdateTranslateResult(result)
   g_TranslateResult := result
   if (g_TranslateEditCtrl != "") {
     try {
-      g_TranslateEditCtrl.Value := result
+      ; 值未变则跳过写入，避免 WM_SETTEXT 触发重绘导致闪烁
+      if (g_TranslateEditCtrl.Value != result)
+        g_TranslateEditCtrl.Value := result
     } catch {
       g_TranslateEditCtrl := ""
     }
@@ -491,14 +493,18 @@ UpdateCorrectResult(result)
     
     if (g_CorrectEditCtrl != "") {
       try {
-        g_CorrectEditCtrl.Value := corrected
+        ; 值未变则跳过写入，避免 WM_SETTEXT 触发重绘导致闪烁
+        if (g_CorrectEditCtrl.Value != corrected)
+          g_CorrectEditCtrl.Value := corrected
       } catch {
         g_CorrectEditCtrl := ""
       }
     }
     if (g_ExplainEditCtrl != "") {
       try {
-        g_ExplainEditCtrl.Value := explanation
+        ; 值未变则跳过写入，避免 WM_SETTEXT 触发重绘导致闪烁
+        if (g_ExplainEditCtrl.Value != explanation)
+          g_ExplainEditCtrl.Value := explanation
       } catch {
         g_ExplainEditCtrl := ""
       }
@@ -508,7 +514,9 @@ UpdateCorrectResult(result)
     g_CorrectedText := result
     if (g_CorrectEditCtrl != "") {
       try {
-        g_CorrectEditCtrl.Value := result
+        ; 值未变则跳过写入，避免 WM_SETTEXT 触发重绘导致闪烁
+        if (g_CorrectEditCtrl.Value != result)
+          g_CorrectEditCtrl.Value := result
       } catch {
         g_CorrectEditCtrl := ""
       }
