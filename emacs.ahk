@@ -594,17 +594,12 @@ global ; V1toV2: Made function global
 return
 } ; V1toV2: Added closing brace for [!>]
 
-V1toV2_GblCode_001:
 XButton1::Send("!{Left}")  ; 将鼠标的前进按钮映射为Alt + Left
 XButton2::Send("!{Right}") ; 将鼠标的后退按钮映射为Alt + Right
 #Space::Send("{Ctrl down}{Space}{Ctrl up}")
 
 
 ;居中显示
-; V1toV2: Removed #NoEnv ; Recommended for performance and compatibility with future AutoHotkey releases.
-; #Warn  ; Enable warnings to assist with detecting common errors.
-SendMode("Input") ; Recommended for new scripts due to its superior spee·d and reliability.
-SetWorkingDir(A_ScriptDir) ; Ensures a consistent starting directory.
 ^!down::
 { ; V1toV2: Added opening brace for [^!down]
 global ; V1toV2: Made function global
