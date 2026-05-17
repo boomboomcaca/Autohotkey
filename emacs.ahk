@@ -697,6 +697,12 @@ F1::
         {
             word := Trim(RegExReplace(StripEmoji(word), "[\r\n\s]+", " "))
             line := Trim(RegExReplace(StripEmoji(line), "[\r\n\s]+", " "))
+            
+            ; 缓存为当前生词并预生成 TTS 语音，供右键朗读使用
+            global WL_CurrentWord
+            WL_CurrentWord := word
+            WL_PregenTts(word)
+            
             textToSend := "单词: " . word . "`n句子: " . line
             
             ClipSaved := ClipboardAll()
@@ -716,6 +722,14 @@ F1::
         }
     }
 }
+
+; 当 Google Gemini 窗口处于活动状态时，拦截鼠标右键，点击后朗读当前查询的单词
+#HotIf (GeminiAutoHwnd && WinActive("ahk_id " . GeminiAutoHwnd))
+RButton::
+{
+    WL_PlayTtsOnce()
+}
+#HotIf
 
 ; 共享模块（只引入一次）
 #Include "ollama_tts.ahk"
