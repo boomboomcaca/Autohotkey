@@ -668,7 +668,19 @@ F2::
             GeminiHwnd := WinGetID("Gemini ahk_exe chrome.exe")
         else
         {
-            MsgBox("未检测到 Gemini 窗口，请确保它已经打开！", "提示", "T3")
+            ; 未检测到 Gemini 窗口，自动通过 Alt+G 打开并 Pop-out chat
+            if WinExist("ahk_exe chrome.exe")
+            {
+                WinActivate("ahk_exe chrome.exe")
+                if !WinWaitActive("ahk_exe chrome.exe", , 2)
+                    return
+                Sleep(300)
+                Send("!g")  ; Alt+G 打开 Gemini 侧边栏
+            }
+            else
+            {
+                MsgBox("未检测到 Chrome 浏览器，请先打开 Chrome！", "提示", "T3")
+            }
             return
         }
     }
