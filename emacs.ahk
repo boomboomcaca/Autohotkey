@@ -699,8 +699,9 @@ F2::
             line := Trim(RegExReplace(StripEmoji(line), "[\r\n\s]+", " "))
             
             ; 缓存为当前生词并预生成 TTS 语音，供右键朗读使用
-            global WL_CurrentWord
+            global WL_CurrentWord, WL_CurrentContext
             WL_CurrentWord := word
+            WL_CurrentContext := line
             WL_PregenTts(word)
             
             textToSend := "单词: " . word . "`n句子: " . line
@@ -723,11 +724,11 @@ F2::
     }
 }
 
-; 当 Google Gemini 窗口处于活动状态时，拦截鼠标右键，点击后朗读当前查询的单词
+; 当 Google Gemini 窗口处于活动状态时，拦截鼠标右键，支持单击朗读单词，长按朗读句子
 #HotIf (GeminiAutoHwnd && WinActive("ahk_id " . GeminiAutoHwnd))
 RButton::
 {
-    WL_PlayTtsOnce()
+    WL_HandleRightClick()
 }
 #HotIf
 

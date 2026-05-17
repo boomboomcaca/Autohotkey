@@ -80,7 +80,7 @@ WL_WM_CONTEXTMENU(wParam, lParam, msg, hwnd)
 
         if (isOurGui) {
             global g_WL_InitMouseX, g_WL_InitMouseY, g_WL_MouseMoved, g_WL_ShowTick
-            WL_PlayTtsOnce()
+            WL_HandleRightClick()
             CoordMode("Mouse", "Screen")
             MouseGetPos(&g_WL_InitMouseX, &g_WL_InitMouseY)
             g_WL_MouseMoved := false
@@ -99,9 +99,9 @@ WL_WM_RBUTTON(wParam, lParam, msg, hwnd)
             ctrl := GuiCtrlFromHwnd(hwnd)
             ; 若目标是我们查词窗口内的控件
             if (ctrl && ctrl.Gui && ctrl.Gui.Hwnd == g_WL_Gui.Hwnd) {
-                if (msg == 0x0205) { ; WM_RBUTTONUP
+                if (msg == 0x0204) { ; WM_RBUTTONDOWN
                     global g_WL_InitMouseX, g_WL_InitMouseY, g_WL_MouseMoved, g_WL_ShowTick
-                    WL_PlayTtsOnce()
+                    WL_HandleRightClick()
                     CoordMode("Mouse", "Screen")
                     MouseGetPos(&g_WL_InitMouseX, &g_WL_InitMouseY)
                     g_WL_MouseMoved := false
@@ -243,14 +243,98 @@ WL_RButtonHandler(*)
 {
   global g_WL_InitMouseX, g_WL_InitMouseY, g_WL_MouseMoved, g_WL_ShowTick
   
-  ; 1. 朗读（非阻塞）
-  WL_PlayTtsOnce()
+  ; 1. 统一右键朗读长按/短按处理中心
+  WL_HandleRightClick()
   
   ; 2. 重置自动关闭防抖动计时器（防止因触发而导致抖动退出）
   CoordMode("Mouse", "Screen")
   MouseGetPos(&g_WL_InitMouseX, &g_WL_InitMouseY)
   g_WL_MouseMoved := false
   g_WL_ShowTick := A_TickCount
+}
+
+; ===== 统一右键长按/短按处理中心 =====
+WL_HandleRightClick()
+{
+  global WL_CurrentWord, WL_CurrentContext
+  
+  ; 探测 RButton 是否已经被释放，设置 0.3 秒判定界限
+  isClick := KeyWait("RButton", "T0.3")
+  
+  if (isClick) {
+    ; 单击 -> 朗读单词
+    WL_PlayTtsOnce()
+  } else {
+    ; 长按 -> 朗读句子
+    if (IsSet(WL_CurrentContext) && WL_CurrentContext != "") {
+      WL_PlaySentenceTts(WL_CurrentContext)
+    } else {
+      ; 无语境时，降级朗读单字
+      WL_PlayTtsOnce()
+    }
+    ; 等待释放，防止松开时触发二级事件或干扰
+    KeyWait("RButton")
+  }
+}
+
+; ===== 朗读完整语境句子 =====
+WL_PlaySentenceTts(sentence)
+{
+  global g_WL_TtsFile, g_WL_TtsPid, g_WL_TtsWord
+  
+  ; 停止上一次预生成或朗读进程
+  if (g_WL_TtsPid > 0) {
+    try ProcessClose(g_WL_TtsPid)
+    g_WL_TtsPid := 0
+  }
+  try SoundPlay("NonExistent.zzz")
+  
+  sentence := Trim(sentence)
+  if (sentence = "")
+    return
+    
+  g_WL_TtsWord := "" ; 重置当前单词缓存，防止与常规单字朗读缓存发生冲突
+  
+  static prevSentenceFile := ""
+  if (prevSentenceFile != "" && prevSentenceFile != g_WL_TtsFile)
+    try FileDelete(prevSentenceFile)
+  g_WL_TtsFile := A_Temp . "\ahk_wl_sentence_" . A_TickCount . ".mp3"
+  prevSentenceFile := g_WL_TtsFile
+  
+  isChinese := RegExMatch(sentence, "[\x{4e00}-\x{9fff}]")
+  voice := isChinese ? "zh-CN-XiaoxiaoNeural" : "en-US-AriaNeural"
+  
+  escapedText := StrReplace(sentence, '"', '\"')
+  escapedText := StrReplace(escapedText, '`r', '')
+  escapedText := StrReplace(escapedText, '`n', ' ')
+  
+  try {
+    ; 用高级微软 Aria 真人神经网络语音生成完整句子（真人语调，且多音字 100% 正确）
+    Run('edge-tts --voice ' . voice . ' --text "' . escapedText . '" --write-media "' . g_WL_TtsFile . '"', , "Hide", &outPid)
+    g_WL_TtsPid := outPid
+    
+    ; 轮询播放
+    SetTimer(WL_PlayTtsOnce_Check, -50)
+  }
+}
+
+WL_PlayTtsOnce_Check()
+{
+  global g_WL_TtsFile, g_WL_TtsPid
+  
+  if (g_WL_TtsPid > 0 && ProcessExist(g_WL_TtsPid)) {
+    SetTimer(WL_PlayTtsOnce_Check, -100)
+    return
+  }
+  g_WL_TtsPid := 0
+  
+  try {
+    if FileExist(g_WL_TtsFile) {
+      try SoundPlay("NonExistent.zzz")
+      SoundPlay(g_WL_TtsFile)
+    }
+  } catch {
+  }
 }
 
 ; ===== 历史记录导航 =====
