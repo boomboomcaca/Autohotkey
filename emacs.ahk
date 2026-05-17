@@ -617,13 +617,105 @@ global ; V1toV2: Made function global
     TrayHeight := MonitorHeight
   Else
     TrayHeight := MonitorHeight-MonitorWorkAreaHeight
-  ActiveWindowTitle := WinGetTitle("A") ; Get the active window's title for "targetting" it/acting on it.
-  WinGetPos(, , &Width, &Height, ActiveWindowTitle) ; Get the active window's position, used for our calculations.
+  ActiveWindowID := WinGetID("A") ; Get the active window's ID for "targetting" it/acting on it.
+  WinGetPos(, , &Width, &Height, "ahk_id " . ActiveWindowID) ; Get the active window's position, used for our calculations.
   TargetX := (A_ScreenWidth/2)-(Width/2) ; Calculate the horizontal target where we'll move the window.
-  TargetY := (A_ScreenHeight/2)-(Height/2)-20 ; Calculate the vertical placement of the window.
-  WinMove(TargetX, TargetY, , , ActiveWindowTitle) ; Move the window to the calculated coordinates.
+  TargetY := MonitorWorkAreaTop ; 放在顶端（如果任务栏在上方也不会被遮挡）
+  WinMove(TargetX, TargetY, , , "ahk_id " . ActiveWindowID) ; Move the window to the calculated coordinates.
 return
 } ; V1toV2: Added closing brace for [^!down]
+
+; 缓存获取到的 Gemini 窗口句柄
+global GeminiAutoHwnd := 0
+
+; 自动寻找 Gemini 窗口的函数
+GetGeminiWindow()
+{
+    global GeminiAutoHwnd
+    
+    ; 如果之前找到过并且窗口还在，就直接用之前的句柄（避免最小化后找不到）
+    if (GeminiAutoHwnd && WinExist("ahk_id " . GeminiAutoHwnd))
+        return GeminiAutoHwnd
+
+    hwnds := WinGetList("ahk_class Chrome_WidgetWin_1 ahk_exe chrome.exe")
+    for hwnd in hwnds
+    {
+        ; 必须是可见窗口
+        if !(WinGetStyle(hwnd) & 0x10000000)
+            continue
+            
+        title := WinGetTitle(hwnd)
+        
+        ; 你的 Gemini 作为 Chrome PWA 运行时，系统获取到的窗口标题正好为空字符串 ""
+        if (title == "")
+        {
+            GeminiAutoHwnd := hwnd
+            return hwnd
+        }
+    }
+    return 0
+}
+
+; F1 自动寻找并切换 Gemini 窗口的显示/隐藏（最小化/激活）
+; 当从外部切换到 Gemini 时，会自动抓取当前鼠标下的单词和句子并粘贴到输入框中
+F1::
+{
+    GeminiHwnd := GetGeminiWindow()
+    if (!GeminiHwnd)
+    {
+        ; 如果没找到空标题的，也可以尝试找找名字里带 Gemini 的
+        if WinExist("Gemini ahk_exe chrome.exe")
+            GeminiHwnd := WinGetID("Gemini ahk_exe chrome.exe")
+        else
+        {
+            MsgBox("未检测到 Gemini 窗口，请确保它已经打开！", "提示", "T3")
+            return
+        }
+    }
+
+    ; 判断窗口是否处于最小化状态（-1 表示最小化）
+    isMin := (WinGetMinMax("ahk_id " . GeminiHwnd) == -1)
+
+    if (!isMin)
+    {
+        ; 只要窗口在屏幕上（不管是不是活动窗口），按 F1 一律直接隐藏（最小化）
+        WinMinimize("ahk_id " . GeminiHwnd)
+    }
+    else
+    {
+        ; 如果窗口当前被隐藏了（处于最小化状态），则：
+        ; 1. 先抓取当前鼠标下的词句（必须在激活窗口前抓取，否则会失去原界面的焦点）
+        word := ""
+        line := ""
+        hasWord := GetWordAndLineAtMouse(&word, &line)
+        
+        ; 2. 恢复并激活 Gemini 窗口
+        WinActivate("ahk_id " . GeminiHwnd)
+        
+        ; 3. 如果成功抓取到词句，则将其处理干净（过滤表情、对象占位符，且将所有换行和连续空格压缩为单行单空格）
+        if (hasWord)
+        {
+            word := Trim(RegExReplace(StripEmoji(word), "[\r\n\s]+", " "))
+            line := Trim(RegExReplace(StripEmoji(line), "[\r\n\s]+", " "))
+            textToSend := "单词: " . word . "`n句子: " . line
+            
+            ClipSaved := ClipboardAll()
+            A_Clipboard := textToSend
+            
+            ; 等待窗口激活后执行清除并粘贴
+            if WinWaitActive("ahk_id " . GeminiHwnd, , 2)
+            {
+                Sleep(200)
+                Send("^a") ; 全选已有内容
+                Sleep(50)
+                Send("^v") ; 粘贴新内容覆盖
+            }
+            
+            Sleep(100)
+            A_Clipboard := ClipSaved
+        }
+    }
+}
 
 ; 共享模块（只引入一次）
 #Include "ollama_tts.ahk"

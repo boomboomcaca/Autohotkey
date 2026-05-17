@@ -79,12 +79,8 @@ OnMessage(0x007B, WL_WM_CONTEXTMENU)
 OnMessage(0x0204, WL_WM_RBUTTON) ; WM_RBUTTONDOWN
 OnMessage(0x0205, WL_WM_RBUTTON) ; WM_RBUTTONUP
 
-; ===== 快捷键 F2 =====
-F2::
+GetWordAndLineAtMouse(&word, &line)
 {
-  global g_WL_Gui, g_WL_ResultCtrl, g_WL_TitleCtrl
-  global g_WL_StreamFile, g_WL_StreamPid, g_WL_Pending, g_WL_StreamContent
-
   CoordMode("Mouse", "Screen")
   MouseGetPos(&mouseX, &mouseY, &winUnder, &ctlUnder)
 
@@ -295,18 +291,30 @@ F2::
         }
       }
     } catch as err {
-      return
+      return false
     }
   }
 
-  if (!found || word = "") {
-    return
+  if (found && word != "") {
+    word := FixOcrConfusion(word)
+    return true
   }
+  return false
+}
 
-  ; OCR 后处理：修正等宽字体下常见的字符混淆 (l↔1, O↔0)
-  word := FixOcrConfusion(word)
+; ===== 快捷键 F2 =====
+F2::
+{
+  global g_WL_Gui, g_WL_ResultCtrl, g_WL_TitleCtrl
+  global g_WL_StreamFile, g_WL_StreamPid, g_WL_Pending, g_WL_StreamContent
 
-  ShowWordPopup(word, line, mouseX, mouseY)
+  word := ""
+  line := ""
+  if (GetWordAndLineAtMouse(&word, &line)) {
+    CoordMode("Mouse", "Screen")
+    MouseGetPos(&mouseX, &mouseY)
+    ShowWordPopup(word, line, mouseX, mouseY)
+  }
 }
 
 ; ===== 显示取词浮窗 =====
