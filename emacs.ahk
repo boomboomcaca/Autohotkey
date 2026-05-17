@@ -656,9 +656,9 @@ GetGeminiWindow()
     return 0
 }
 
-; F1 自动寻找并切换 Gemini 窗口的显示/隐藏（最小化/激活）
+; F2 自动寻找并切换 Gemini 窗口的显示/隐藏（最小化/激活）
 ; 当从外部切换到 Gemini 时，会自动抓取当前鼠标下的单词和句子并粘贴到输入框中
-F1::
+F2::
 {
     GeminiHwnd := GetGeminiWindow()
     if (!GeminiHwnd)
@@ -678,7 +678,7 @@ F1::
 
     if (!isMin)
     {
-        ; 只要窗口在屏幕上（不管是不是活动窗口），按 F1 一律直接隐藏（最小化）
+        ; 只要窗口在屏幕上（不管是不是活动窗口），按 F2 一律直接隐藏（最小化）
         WinMinimize("ahk_id " . GeminiHwnd)
     }
     else

@@ -303,19 +303,20 @@ GetWordAndLineAtMouse(&word, &line)
 }
 
 ; ===== 快捷键 F2 =====
-F2::
-{
-  global g_WL_Gui, g_WL_ResultCtrl, g_WL_TitleCtrl
-  global g_WL_StreamFile, g_WL_StreamPid, g_WL_Pending, g_WL_StreamContent
-
-  word := ""
-  line := ""
-  if (GetWordAndLineAtMouse(&word, &line)) {
-    CoordMode("Mouse", "Screen")
-    MouseGetPos(&mouseX, &mouseY)
-    ShowWordPopup(word, line, mouseX, mouseY)
-  }
-}
+; 已停止原 F2 鼠标取词浮窗功能，该键现已改由 Gemini 联动功能使用
+; F2::
+; {
+;   global g_WL_Gui, g_WL_ResultCtrl, g_WL_TitleCtrl
+;   global g_WL_StreamFile, g_WL_StreamPid, g_WL_Pending, g_WL_StreamContent
+; 
+;   word := ""
+;   line := ""
+;   if (GetWordAndLineAtMouse(&word, &line)) {
+;     CoordMode("Mouse", "Screen")
+;     MouseGetPos(&mouseX, &mouseY)
+;     ShowWordPopup(word, line, mouseX, mouseY)
+;   }
+; }
 
 ; ===== 显示取词浮窗 =====
 ShowWordPopup(word, context, posX, posY)
