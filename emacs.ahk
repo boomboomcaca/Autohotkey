@@ -633,9 +633,15 @@ GetGeminiWindow()
 {
     global GeminiAutoHwnd
     
-    ; 如果之前找到过并且窗口还在，就直接用之前的句柄（避免最小化后找不到）
-    if (GeminiAutoHwnd && WinExist("ahk_id " . GeminiAutoHwnd))
-        return GeminiAutoHwnd
+    ; 如果之前找到过并且窗口还在，就直接用之前的句柄（避免隐藏后找不到）
+    if (GeminiAutoHwnd)
+    {
+        DetectHiddenWindows(true)
+        exists := WinExist("ahk_id " . GeminiAutoHwnd)
+        DetectHiddenWindows(false)
+        if (exists)
+            return GeminiAutoHwnd
+    }
 
     hwnds := WinGetList("ahk_class Chrome_WidgetWin_1 ahk_exe chrome.exe")
     for hwnd in hwnds
@@ -685,23 +691,28 @@ F2::
         }
     }
 
-    ; 判断窗口是否处于最小化状态（-1 表示最小化）
-    isMin := (WinGetMinMax("ahk_id " . GeminiHwnd) == -1)
+    ; 判断窗口是否可见（WS_VISIBLE = 0x10000000）
+    DetectHiddenWindows(true)
+    isVisible := (WinGetStyle("ahk_id " . GeminiHwnd) & 0x10000000)
+    DetectHiddenWindows(false)
 
-    if (!isMin)
+    if (isVisible)
     {
-        ; 只要窗口在屏幕上（不管是不是活动窗口），按 F2 一律直接隐藏（最小化）
-        WinMinimize("ahk_id " . GeminiHwnd)
+        ; 只要窗口在屏幕上（不管是不是活动窗口），按 F2 一律直接隐藏（从任务栏也消失）
+        WinHide("ahk_id " . GeminiHwnd)
     }
     else
     {
-        ; 如果窗口当前被隐藏了（处于最小化状态），则：
+        ; 如果窗口当前被隐藏了，则：
         ; 1. 先抓取当前鼠标下的词句（必须在激活窗口前抓取，否则会失去原界面的焦点）
         word := ""
         line := ""
         hasWord := GetWordAndLineAtMouse(&word, &line)
         
         ; 2. 恢复并激活 Gemini 窗口
+        DetectHiddenWindows(true)
+        WinShow("ahk_id " . GeminiHwnd)
+        DetectHiddenWindows(false)
         WinActivate("ahk_id " . GeminiHwnd)
         
         ; 3. 如果成功抓取到词句，则将其处理干净（过滤表情、对象占位符，且将所有换行和连续空格压缩为单行单空格）
