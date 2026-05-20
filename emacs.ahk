@@ -713,6 +713,7 @@ F2::
         DetectHiddenWindows(true)
         WinShow("ahk_id " . GeminiHwnd)
         DetectHiddenWindows(false)
+        Sleep(150)
         WinActivate("ahk_id " . GeminiHwnd)
         
         ; 3. 如果成功抓取到词句，则将其处理干净（过滤表情、对象占位符，且将所有换行和连续空格压缩为单行单空格）
@@ -731,11 +732,16 @@ F2::
             
             ClipSaved := ClipboardAll()
             A_Clipboard := textToSend
+            if !ClipWait(2)
+            {
+                A_Clipboard := ClipSaved
+                return
+            }
             
             ; 等待窗口激活后执行清除并粘贴
             if WinWaitActive("ahk_id " . GeminiHwnd, , 2)
             {
-                Sleep(200)
+                Sleep(300)
                 Send("^a") ; 全选已有内容
                 Sleep(50)
                 Send("^v") ; 粘贴新内容覆盖
