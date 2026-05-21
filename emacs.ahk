@@ -739,17 +739,26 @@ F2::
             }
             
             ; 等待窗口激活后执行清除并粘贴
-            if WinWaitActive("ahk_id " . GeminiHwnd, , 2)
+            if WinWaitActive("ahk_id " . GeminiHwnd, , 3)
             {
+                Sleep(500)
+                ; 先点击底部输入框区域，确保焦点在输入框而非页面主体
+                WinGetPos(&gx, &gy, &gw, &gh, "ahk_id " . GeminiHwnd)
+                CoordMode("Mouse", "Screen")
+                Click(gx + (gw // 2), gy + gh - 85)
                 Sleep(300)
-                Send("^a") ; 全选已有内容
-                Sleep(50)
+                Suspend(true)  ; 暂时挂起热键，防止 ^a 被 emacs 绑定拦截
+                Send("^a") ; 全选输入框内已有内容
+                Sleep(100)
                 Send("^v") ; 粘贴新内容覆盖
+                Suspend(false)
             }
+
             
             Sleep(100)
             A_Clipboard := ClipSaved
         }
+
     }
 }
 
