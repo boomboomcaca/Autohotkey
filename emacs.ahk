@@ -666,6 +666,7 @@ GetGeminiWindow()
 ; 当从外部切换到 Gemini 时，会自动抓取当前鼠标下的单词和句子并粘贴到输入框中
 F2::
 {
+    global GeminiAutoHwnd
     GeminiHwnd := GetGeminiWindow()
     if (!GeminiHwnd)
     {
@@ -677,11 +678,16 @@ F2::
             ; 未检测到 Gemini 窗口，自动通过 Alt+G 打开并 Pop-out chat
             if WinExist("ahk_exe chrome.exe")
             {
-                WinActivate("ahk_exe chrome.exe")
-                if !WinWaitActive("ahk_exe chrome.exe", , 2)
-                    return
-                Sleep(300)
-                Send("!g")  ; Alt+G 打开 Gemini 侧边栏
+                try {
+                    WinActivate("ahk_exe chrome.exe")
+                    if !WinWaitActive("ahk_exe chrome.exe", , 2)
+                        return
+                    Sleep(300)
+                    Send("!g")  ; Alt+G 打开 Gemini 侧边栏
+                }
+                catch TargetError {
+                    ; 忽略 Chrome 不存在的错误
+                }
             }
             else
             {
@@ -692,14 +698,25 @@ F2::
     }
 
     ; 判断窗口是否可见（WS_VISIBLE = 0x10000000）
-    DetectHiddenWindows(true)
-    isVisible := (WinGetStyle("ahk_id " . GeminiHwnd) & 0x10000000)
-    DetectHiddenWindows(false)
+    try {
+        DetectHiddenWindows(true)
+        isVisible := (WinGetStyle("ahk_id " . GeminiHwnd) & 0x10000000)
+        DetectHiddenWindows(false)
+    }
+    catch TargetError {
+        GeminiAutoHwnd := 0
+        return
+    }
 
     if (isVisible)
     {
         ; 只要窗口在屏幕上（不管是不是活动窗口），按 F2 一律直接隐藏（从任务栏也消失）
-        WinHide("ahk_id " . GeminiHwnd)
+        try {
+            WinHide("ahk_id " . GeminiHwnd)
+        }
+        catch TargetError {
+            GeminiAutoHwnd := 0
+        }
     }
     else
     {
@@ -710,11 +727,17 @@ F2::
         hasWord := GetWordAndLineAtMouse(&word, &line)
         
         ; 2. 恢复并激活 Gemini 窗口
-        DetectHiddenWindows(true)
-        WinShow("ahk_id " . GeminiHwnd)
-        DetectHiddenWindows(false)
-        Sleep(150)
-        WinActivate("ahk_id " . GeminiHwnd)
+        try {
+            DetectHiddenWindows(true)
+            WinShow("ahk_id " . GeminiHwnd)
+            DetectHiddenWindows(false)
+            Sleep(150)
+            WinActivate("ahk_id " . GeminiHwnd)
+        }
+        catch TargetError {
+            GeminiAutoHwnd := 0
+            return
+        }
         
         ; 3. 如果成功抓取到词句，则将其处理干净（过滤表情、对象占位符，且将所有换行和连续空格压缩为单行单空格）
         if (hasWord)
@@ -739,21 +762,25 @@ F2::
             }
             
             ; 等待窗口激活后执行清除并粘贴
-            if WinWaitActive("ahk_id " . GeminiHwnd, , 3)
-            {
-                Sleep(500)
-                ; 先点击底部输入框区域，确保焦点在输入框而非页面主体
-                WinGetPos(&gx, &gy, &gw, &gh, "ahk_id " . GeminiHwnd)
-                CoordMode("Mouse", "Screen")
-                Click(gx + (gw // 2), gy + gh - 85)
-                Sleep(300)
-                Suspend(true)  ; 暂时挂起热键，防止 ^a 被 emacs 绑定拦截
-                Send("^a") ; 全选输入框内已有内容
-                Sleep(100)
-                Send("^v") ; 粘贴新内容覆盖
-                Suspend(false)
+            try {
+                if WinWaitActive("ahk_id " . GeminiHwnd, , 3)
+                {
+                    Sleep(500)
+                    ; 先点击底部输入框区域，确保焦点在输入框而非页面主体
+                    WinGetPos(&gx, &gy, &gw, &gh, "ahk_id " . GeminiHwnd)
+                    CoordMode("Mouse", "Screen")
+                    Click(gx + (gw // 2), gy + gh - 85)
+                    Sleep(300)
+                    Suspend(true)  ; 暂时挂起热键，防止 ^a 被 emacs 绑定拦截
+                    Send("^a") ; 全选输入框内已有内容
+                    Sleep(100)
+                    Send("^v") ; 粘贴新内容覆盖
+                    Suspend(false)
+                }
             }
-
+            catch TargetError {
+                GeminiAutoHwnd := 0
+            }
             
             Sleep(100)
             A_Clipboard := ClipSaved
