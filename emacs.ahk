@@ -620,7 +620,7 @@ global ; V1toV2: Made function global
   ActiveWindowID := WinGetID("A") ; Get the active window's ID for "targetting" it/acting on it.
   WinGetPos(, , &Width, &Height, "ahk_id " . ActiveWindowID) ; Get the active window's position, used for our calculations.
   TargetX := (A_ScreenWidth/2)-(Width/2) ; Calculate the horizontal target where we'll move the window.
-  TargetY := MonitorWorkAreaTop ; 放在顶端（如果任务栏在上方也不会被遮挡）
+  TargetY := MonitorWorkAreaTop + (MonitorWorkAreaHeight/2) - (Height/2) ; 垂直居中（工作区内）
   WinMove(TargetX, TargetY, , , "ahk_id " . ActiveWindowID) ; Move the window to the calculated coordinates.
 return
 } ; V1toV2: Added closing brace for [^!down]
