@@ -452,7 +452,7 @@ StartChatAsync(question)
     FileAppend(json, jsonFile, "UTF-8-RAW")
   } catch {
     g_AnswerEditCtrl.Value := "请求启动失败: 无法写入临时文件"
-    g_SendBtnCtrl.Enabled := true
+    try g_SendBtnCtrl.Enabled := true
     return
   }
   
@@ -466,7 +466,7 @@ StartChatAsync(question)
     g_ChatStreamFileSize := 0
   } catch Error as e {
     g_AnswerEditCtrl.Value := "请求启动失败: " . e.Message
-    g_SendBtnCtrl.Enabled := true
+    try g_SendBtnCtrl.Enabled := true
     return
   }
   
@@ -541,7 +541,7 @@ CheckChatResult()
     
     g_ChatPending := false
     g_StreamPidChat := 0
-    g_SendBtnCtrl.Enabled := true
+    try g_SendBtnCtrl.Enabled := true
     SetTimer(CheckChatResult, 0)
     
     ; 清理临时文件
