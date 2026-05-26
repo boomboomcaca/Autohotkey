@@ -770,6 +770,9 @@ F2::
             try {
                 if WinWaitActive("ahk_id " . GeminiHwnd, , 3)
                 {
+                    ; 保存鼠标原位置，操作完成后恢复
+                    MouseGetPos(&origX, &origY)
+
                     Sleep(500)
                     ; 先点击底部输入框区域，确保焦点在输入框而非页面主体
                     WinGetPos(&gx, &gy, &gw, &gh, "ahk_id " . GeminiHwnd)
@@ -781,6 +784,9 @@ F2::
                     Sleep(100)
                     Send("^v") ; 粘贴新内容覆盖
                     Suspend(false)
+
+                    ; 恢复鼠标到原位置
+                    MouseMove(origX, origY)
                 }
             }
             catch TargetError {
@@ -802,9 +808,10 @@ RButton::
 }
 #HotIf
 
-; 共享模块（只引入一次）
-#Include "ollama_tts.ahk"
-#Include "ollama_prompt_chat.ahk"
+; 共享模块（按依赖顺序）
+#Include "shared/ollama_api.ahk"        ; 基础工具函数（StripEmoji 等）
+#Include "shared/ollama_prompt_chat.ahk" ; GUI 事件处理（依赖 ollama_api）
+#Include "shared/ollama_tts.ahk"         ; TTS 朗读
 
 ; 引入 Ollama 翻译/纠错模块
 #Include "ollama_translate.ahk"

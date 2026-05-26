@@ -1,1 +1,18 @@
+# 配置文件（包含 API Key 等敏感信息）
 ollama_config.ini
+
+# 编译输出
+*.exe
+Ahk2Exe.zip
+
+# 编译器
+Compiler/
+Compiler.zip
+
+# macOS 系统文件
+.DS_Store
+Thumbs.db
+
+# 临时文件
+*.tmp
+*.log

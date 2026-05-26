@@ -2,9 +2,9 @@
 ; 鼠标取词 + 语境解释 - Alt+W：截取鼠标所在窗口 → Windows OCR → 定位单词 → Ollama 解释
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-#Include "UIA.ahk"
-#Include "OCR.ahk"
-; 共享模块已在入口处引入（emacs.ahk）
+#Include "lib/UIA.ahk"
+#Include "lib/OCR.ahk"
+; ollama_api.ahk 已在 emacs.ahk 中引入，不要重复引入！
 
 ; ===== 全局变量 =====
 g_WL_Gui := ""

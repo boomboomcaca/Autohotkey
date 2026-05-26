@@ -57,8 +57,7 @@ g_PromptManageBtn := ""
 
 ; 共享模块已在入口处引入（emacs.ahk）
 
-; 初始化 Prompt 模板
-InitPrompts()
+; InitPrompts() 已移至 shared/ollama_prompt_chat.ahk，不要重复定义
 
 g_MistralApiKey := IniRead(A_ScriptDir . "\ollama_config.ini", "Settings", "MistralApiKey", "")
 g_MistralModel := IniRead(A_ScriptDir . "\ollama_config.ini", "Settings", "MistralModel", "mistral-large-latest")
