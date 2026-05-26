@@ -773,16 +773,22 @@ F2::
                     ; 保存鼠标原位置，操作完成后恢复
                     MouseGetPos(&origX, &origY)
 
-                    Sleep(500)
-                    ; 先点击底部输入框区域，确保焦点在输入框而非页面主体
+                    ; 优化：WinWaitActive 已等待窗口激活，300ms 足够 Gemini 渲染输入框
+                    Sleep(300)
+                    ; 点击输入框区域（底部中央，偏移 -85 避免遮挡）
                     WinGetPos(&gx, &gy, &gw, &gh, "ahk_id " . GeminiHwnd)
                     CoordMode("Mouse", "Screen")
                     Click(gx + (gw // 2), gy + gh - 85)
-                    Sleep(300)
+                    ; 优化：点击响应 + 输入框获焦，150ms 足够（Chrome 通常 <50ms 响应）
+                    Sleep(150)
                     Suspend(true)  ; 暂时挂起热键，防止 ^a 被 emacs 绑定拦截
                     Send("^a") ; 全选输入框内已有内容
-                    Sleep(100)
+                    ; 优化：全选是纯内存操作，无需等待
+                    Sleep(30)
                     Send("^v") ; 粘贴新内容覆盖
+                    ; 优化：粘贴后立即发送，中间无需等待
+                    Sleep(30)
+                    Send("{Enter}") ; 回车发送
                     Suspend(false)
 
                     ; 恢复鼠标到原位置
