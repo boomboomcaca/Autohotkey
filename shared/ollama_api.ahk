@@ -31,6 +31,22 @@ EscapeJsonForApi(text)
     return text
 }
 
+; ===== JSON 反转义（核心逻辑）=====
+; 关键：必须先把转义反斜杠 (\\) 抽到占位符，最后再还原，
+; 否则像 "\\n"（字面反斜杠+n）会被先解析成换行而损坏内容。
+UnescapeApiJson(text)
+{
+    ph := Chr(0xE000)  ; 私有区占位符，正常文本不会出现
+    text := StrReplace(text, "\\", ph)
+    text := StrReplace(text, "\n", "`n")
+    text := StrReplace(text, "\r", "`r")
+    text := StrReplace(text, "\t", "`t")
+    text := StrReplace(text, "\`"", "`"")
+    text := StrReplace(text, "\/", "/")
+    text := StrReplace(text, ph, "\")
+    return text
+}
+
 ; ===== 构建标准 API JSON =====
 BuildApiJson(prompt, model?, endpoint?, temperature := 0, maxTokens := 1024, stream := false)
 {
@@ -77,11 +93,7 @@ CallApiSync(prompt, model?, timeout := 30)
             return "解析失败: " . SubStr(response, 1, 200)
 
         ; 转义还原
-        result := StrReplace(result, "\n", "`n")
-        result := StrReplace(result, "\r", "`r")
-        result := StrReplace(result, "\t", "`t")
-        result := StrReplace(result, "\`"", "`"")
-        result := StrReplace(result, "\\", "\")
+        result := UnescapeApiJson(result)
 
         result := Trim(result)
         return StripEmoji(result)
@@ -166,12 +178,7 @@ ReadStreamContent(filePath)
 
         ; 提取 content
         if RegExMatch(line, '"content"\s*:\s*"((?:[^"\\]|\\.)*)"', &m) {
-            token := m[1]
-            token := StrReplace(token, "\n", "`n")
-            token := StrReplace(token, "\r", "`r")
-            token := StrReplace(token, "\t", "`t")
-            token := StrReplace(token, '\"', '"')
-            token := StrReplace(token, "\\", "\")
+            token := UnescapeApiJson(m[1])
             result .= token
         }
     }

@@ -2,11 +2,12 @@
 ; TTS 朗读相关函数 (Edge TTS 版)
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-global g_TtsProcPid := 0  ; 用于跟踪 edge-tts 进程
+global g_TtsProcPid := 0  ; 点击朗读(PlayTtsText/PollTtsPlay)的 edge-tts 进程
 global g_TtsProcStartTick := 0
 global g_TtsPlayText := ""
 global g_TtsTempFile := ""
 global g_HoverTtsStartTick := 0
+global g_HoverTtsProcPid := 0  ; 悬停朗读(PlayTtsLoop/PollHoverTtsPlay)独立的 edge-tts 进程，避免与点击朗读互相覆盖
 
 Gui_PlayOriginal(*)
 {
@@ -180,20 +181,20 @@ CheckTtsHover()
 
 StopTts()
 {
-  global g_TtsPlaying, g_HoverTarget, g_TtsProcPid
+  global g_TtsPlaying, g_HoverTarget, g_HoverTtsProcPid
   g_TtsPlaying := false
   g_HoverTarget := ""
   try {
-    if (g_TtsProcPid > 0)
-      ProcessClose(g_TtsProcPid)
+    if (g_HoverTtsProcPid > 0)
+      ProcessClose(g_HoverTtsProcPid)
     SoundPlay("NonExistent.zzz")
   }
-  g_TtsProcPid := 0
+  g_HoverTtsProcPid := 0
 }
 
 PlayTtsLoop(isRetry := false)
 {
-  global g_TtsPlaying, g_HoverTarget, g_TtsProcPid, g_HoverTtsRetryCount
+  global g_TtsPlaying, g_HoverTarget, g_HoverTtsProcPid, g_HoverTtsRetryCount
   global g_OrigEditCtrl, g_CorrectEditCtrl, g_TranslateEditCtrl, g_QuestionEditCtrl
   static lastText := ""  ; 用于缓存上一次处理的文字
   static tempFile := A_Temp . "\ahk_tts_hover.mp3"
@@ -206,16 +207,22 @@ PlayTtsLoop(isRetry := false)
     return
   }
 
-  if (g_HoverTarget = "orig")
-    text := Trim(g_OrigEditCtrl.Value)
-  else if (g_HoverTarget = "correct")
-    text := Trim(g_CorrectEditCtrl.Value)
-  else if (g_HoverTarget = "translate")
-    text := Trim(g_TranslateEditCtrl.Value)
-  else if (g_HoverTarget = "question")
-    text := Trim(g_QuestionEditCtrl.Value)
-  else
+  ; 读取控件文本必须放进 try：窗口可能已销毁，控件引用失效时 .Value 会抛出未捕获异常
+  text := ""
+  try {
+    if (g_HoverTarget = "orig")
+      text := Trim(g_OrigEditCtrl.Value)
+    else if (g_HoverTarget = "correct")
+      text := Trim(g_CorrectEditCtrl.Value)
+    else if (g_HoverTarget = "translate")
+      text := Trim(g_TranslateEditCtrl.Value)
+    else if (g_HoverTarget = "question")
+      text := Trim(g_QuestionEditCtrl.Value)
+    else
+      return
+  } catch {
     return
+  }
 
   if (text = "" || InStr(text, "正在") || InStr(text, "切换后"))
     return
@@ -231,9 +238,9 @@ PlayTtsLoop(isRetry := false)
         
         ; 异步非阻塞生成音频
         Run('edge-tts --voice ' . voice . ' --text "' . escapedText . '" --write-media "' . tempFile . '"', , "Hide", &outPid)
-        g_TtsProcPid := outPid
+        g_HoverTtsProcPid := outPid
         lastText := text
-        
+
         global g_HoverTtsStartTick
         g_HoverTtsStartTick := A_TickCount
         SetTimer(PollHoverTtsPlay, 100)
@@ -249,17 +256,17 @@ PlayTtsLoop(isRetry := false)
 
 PollHoverTtsPlay()
 {
-  global g_TtsProcPid, g_HoverTtsStartTick, g_TtsPlaying
+  global g_HoverTtsProcPid, g_HoverTtsStartTick, g_TtsPlaying
   static tempFile := A_Temp . "\ahk_tts_hover.mp3"
 
-  if (g_TtsProcPid <= 0 || !g_TtsPlaying) {
+  if (g_HoverTtsProcPid <= 0 || !g_TtsPlaying) {
     SetTimer(PollHoverTtsPlay, 0)
     return
   }
 
   if (A_TickCount - g_HoverTtsStartTick > 10000) {
-    try ProcessClose(g_TtsProcPid)
-    g_TtsProcPid := 0
+    try ProcessClose(g_HoverTtsProcPid)
+    g_HoverTtsProcPid := 0
     SetTimer(PollHoverTtsPlay, 0)
 
     global g_HoverTtsRetryCount
@@ -270,9 +277,9 @@ PollHoverTtsPlay()
     return
   }
 
-  if (!ProcessExist(g_TtsProcPid)) {
+  if (!ProcessExist(g_HoverTtsProcPid)) {
     SetTimer(PollHoverTtsPlay, 0)
-    g_TtsProcPid := 0
+    g_HoverTtsProcPid := 0
     if (g_TtsPlaying && FileExist(tempFile)) {
       SoundPlay(tempFile)
     }

@@ -36,6 +36,7 @@ g_WL_MouseMoved := false
 g_WL_TtsFile := ""
 g_WL_TtsPid := 0
 g_WL_TtsWord := ""
+g_WL_TtsGenTick := 0
 g_WL_History := []
 g_WL_HistoryIdx := 0
 
@@ -521,7 +522,7 @@ ShowWordPopup(word, context, posX, posY)
 WL_HandleEnter(*)
 {
   global g_WL_WordEdit, g_WL_ContextEdit, g_WL_ResultCtrl, WL_CurrentWord, WL_CurrentContext
-  global g_QuestionEditCtrl, g_AnswerEditCtrl
+  global g_QuestionEditCtrl, g_AnswerEditCtrl, g_WL_LangMode
 
   ; 检测输入法是否处于组合状态（正在输入中文）
   if (IsImeComposing()) {
@@ -676,7 +677,7 @@ WL_ToggleLang()
 StartWordOllamaRequest(word, context, isNavigating := false, isRetry := false)
 {
   global g_WL_StreamFile, g_WL_StreamPid, g_WL_Pending, g_WL_StreamContent, g_WL_LangMode
-  global g_WL_History, g_WL_HistoryIdx, g_WL_RetryCount
+  global g_WL_History, g_WL_HistoryIdx, g_WL_RetryCount, g_WL_StreamFileSize
 
   if (!isRetry)
     g_WL_RetryCount := 0
@@ -915,12 +916,7 @@ WL_ReadStreamContent(filePath)
       continue
     
     if RegExMatch(line, '"content"\s*:\s*"((?:[^"\\]|\\.)*)"', &m) {
-      token := m[1]
-      token := StrReplace(token, "\n", "`n")
-      token := StrReplace(token, "\r", "`r")
-      token := StrReplace(token, "\t", "`t")
-      token := StrReplace(token, '\`"', '`"')
-      token := StrReplace(token, "\\", "\")
+      token := UnescapeApiJson(m[1])
       result .= token
     }
   }

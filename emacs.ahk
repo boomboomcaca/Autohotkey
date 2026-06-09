@@ -182,6 +182,12 @@ kill_emacs()
   global is_pre_x := ""
   Return
 }
+; C-x 前缀超时自动复位，避免按下 C-x 后未跟随 C-f/C-s 导致前缀“粘住”
+ResetPreX()
+{
+  global is_pre_x := 0
+  Return
+}
 move_beginning_of_line()
 {
   global
@@ -473,6 +479,19 @@ global ; V1toV2: Made function global
     kill_region()
 Return
 } ; V1toV2: Added closing brace for [^w]
+; C-x 前缀键：按下后 1.5 秒内按 C-f / C-s 触发 find_file / save_buffer，否则自动取消
+^x::
+{
+global
+  If is_target()
+    Send(A_ThisHotkey)
+  Else
+  {
+    is_pre_x := 1
+    SetTimer(ResetPreX, -1500)
+  }
+Return
+}
 !w::
 { ; V1toV2: Added opening brace for [!w]
 global ; V1toV2: Made function global
@@ -603,29 +622,28 @@ XButton2::Send("!{Right}") ; 将鼠标的后退按钮映射为Alt + Right
 ^!down::
 { ; V1toV2: Added opening brace for [^!down]
 global ; V1toV2: Made function global
-  MonitorGet(, &MonitorLeft, &MonitorTop, &MonitorRight, &MonitorBottom)
-  MonitorWidth := MonitorRight-MonitorLeft
-  MonitorHeight := MonitorBottom-MonitorTop
-  MonitorGetWorkArea(, &MonitorWorkAreaLeft, &MonitorWorkAreaTop, &MonitorWorkAreaRight, &MonitorWorkAreaBottom)
-  MonitorWorkAreaWidth := MonitorWorkAreaRight-MonitorWorkAreaLeft
-  MonitorWorkAreaHeight := MonitorWorkAreaBottom-MonitorWorkAreaTop
-  If (MonitorWidth=MonitorWorkAreaWidth)
-    TrayWidth := MonitorWidth
-  Else
-    TrayWidth := MonitorWidth-MonitorWorkAreaWidth
-  If (MonitorHeight=MonitorWorkAreaHeight)
-    TrayHeight := MonitorHeight
-  Else
-    TrayHeight := MonitorHeight-MonitorWorkAreaHeight
-  ActiveWindowID := WinGetID("A") ; Get the active window's ID for "targetting" it/acting on it.
-  WinGetPos(, , &Width, &Height, "ahk_id " . ActiveWindowID) ; Get the active window's position, used for our calculations.
-  TargetX := (A_ScreenWidth/2)-(Width/2) ; Calculate the horizontal target where we'll move the window.
+  ActiveWindowID := WinGetID("A") ; 活动窗口句柄
+  if (!ActiveWindowID)
+    return
+  WinGetPos(, , &Width, &Height, "ahk_id " . ActiveWindowID)
+
+  ; 取“活动窗口所在显示器”的工作区（而非主显示器），修正多屏下窗口被拉回主屏的问题
+  hMon := DllCall("MonitorFromWindow", "Ptr", ActiveWindowID, "UInt", 2, "Ptr") ; MONITOR_DEFAULTTONEAREST
+  mi := Buffer(40, 0)
+  NumPut("UInt", 40, mi, 0) ; cbSize
+  DllCall("GetMonitorInfoW", "Ptr", hMon, "Ptr", mi)
+  WorkLeft := NumGet(mi, 20, "Int"), WorkTop := NumGet(mi, 24, "Int")
+  WorkRight := NumGet(mi, 28, "Int"), WorkBottom := NumGet(mi, 32, "Int")
+  WorkWidth := WorkRight - WorkLeft
+  WorkHeight := WorkBottom - WorkTop
+
+  TargetX := WorkLeft + (WorkWidth/2)-(Width/2) ; 水平居中于本显示器工作区
   ; Gemini 窗口：置顶居中（工作区顶部）；其他窗口：垂直居中（工作区内）
   GeminiHwnd := GetGeminiWindow()
   if (GeminiHwnd && ActiveWindowID = GeminiHwnd)
-    TargetY := MonitorWorkAreaTop
+    TargetY := WorkTop
   Else
-    TargetY := MonitorWorkAreaTop + (MonitorWorkAreaHeight/2) - (Height/2)
+    TargetY := WorkTop + (WorkHeight/2) - (Height/2)
   WinMove(TargetX, TargetY, , , "ahk_id " . ActiveWindowID) ; Move the window to the calculated coordinates.
 return
 } ; V1toV2: Added closing brace for [^!down]
@@ -781,15 +799,16 @@ F2::
                     Click(gx + (gw // 2), gy + gh - 85)
                     ; 优化：点击响应 + 输入框获焦，150ms 足够（Chrome 通常 <50ms 响应）
                     Sleep(150)
-                    Suspend(true)  ; 暂时挂起热键，防止 ^a 被 emacs 绑定拦截
-                    Send("^a") ; 全选输入框内已有内容
-                    ; 优化：全选是纯内存操作，无需等待
-                    Sleep(30)
-                    Send("^v") ; 粘贴新内容覆盖
-                    ; 优化：粘贴后立即发送，中间无需等待
-                    Sleep(30)
-                    Send("{Enter}") ; 回车发送
-                    Suspend(false)
+                    try {
+                        Suspend(true)  ; 暂时挂起热键，防止 ^a 被 emacs 绑定拦截
+                        Send("^a") ; 全选输入框内已有内容
+                        Sleep(30)
+                        Send("^v") ; 粘贴新内容覆盖
+                        Sleep(30)
+                        Send("{Enter}") ; 回车发送
+                    } finally {
+                        Suspend(false)  ; 无论是否抛错都必须恢复，否则所有 emacs 热键会永久失效
+                    }
 
                     ; 恢复鼠标到原位置
                     MouseMove(origX, origY)
@@ -798,9 +817,10 @@ F2::
             catch TargetError {
                 GeminiAutoHwnd := 0
             }
-            
-            Sleep(100)
-            A_Clipboard := ClipSaved
+            finally {
+                Sleep(100)
+                A_Clipboard := ClipSaved  ; 无论成功失败都恢复剪贴板，避免污染用户剪贴板
+            }
         }
 
     }

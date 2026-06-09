@@ -94,12 +94,8 @@ OllamaCall(prompt)
     else
       return "解析失败: " . SubStr(response, 1, 200)
     
-    result := StrReplace(result, "\n", "`n")
-    result := StrReplace(result, "\r", "`r")
-    result := StrReplace(result, "\t", "`t")
-    result := StrReplace(result, "\`"", "`"")
-    result := StrReplace(result, "\\", "\")
-    
+    result := UnescapeApiJson(result)
+
     result := Trim(result)
     return StripEmoji(result)
   } Catch Error as e {
@@ -135,6 +131,7 @@ ShowMainGui(original)
   
     ; 如果已有窗口存在，先关闭
   if (g_MainGui != "") {
+    try UnregisterGuiHotkeys(g_MainGui.Hwnd)
     try {
       g_MainGui.Destroy()
     }
@@ -285,6 +282,19 @@ ShowMainGui(original)
   }
 }
 
+; ===== 注销翻译窗口的窗口专属热键（按 Hwnd） =====
+; 每次重建窗口都会用新的 Hwnd 重新注册 HotIfWinActive 热键变体，
+; 旧窗口被销毁后其变体不会自动移除，多次开窗会持续累积，需在销毁前主动注销。
+UnregisterGuiHotkeys(hwnd)
+{
+  try {
+    HotIfWinActive("ahk_id " hwnd)
+    for hk in ["Enter", "NumpadEnter", "^Enter", "^NumpadEnter", "^Tab", "Tab", "^v", "Escape", "^Backspace"]
+      try Hotkey(hk, "Off")
+    HotIfWinActive()
+  }
+}
+
 StartAsyncRequests(text, requestType := "default")
 {
   global g_HttpCorrect, g_CorrectPending, g_TranslatePending, g_IsChineseMode
@@ -315,10 +325,19 @@ StartAsyncRequests(text, requestType := "default")
     }
     
     g_HttpCorrect := StartAsyncHttp(combinedPrompt, "correct")
+    ; 请求启动失败（COM 创建或 Send 抛错时返回 0）：清除 pending 并提前返回，
+    ; 否则下方轮询定时器会因 IsObject(0)=false 永远无法清零 pending 而无限空转。
+    if (!IsObject(g_HttpCorrect)) {
+      g_CorrectPending := false
+      g_TranslatePending := false
+      try UpdateCorrectResult("请求失败，请检查网络或代理后重试")
+      try UpdateTranslateResult("请求失败")
+      return
+    }
     g_CorrectPending := true
     g_TranslatePending := true
   }
-  
+
   ; 启动轮询定时器
   SetTimer(CheckAsyncResults, 100)
 }
@@ -528,6 +547,37 @@ Gui_Apply(guiObj, *)
   global g_TranslateResult, g_CorrectResult, g_OldClip, g_SelectedResult
   global g_MainGui, g_TranslateEditCtrl, g_CorrectEditCtrl, g_OrigEditCtrl
   global g_CorrectedText, g_IsChineseMode
+  global g_HttpCorrect, g_CorrectPending, g_TranslatePending, g_ChatPending
+  global g_StreamPidCorrect, g_StreamPidTranslate, g_StreamPidChat
+  global g_TtsPlaying, g_HoverTarget
+
+  ; 替换前先停止所有在途请求与轮询定时器，避免销毁窗口后回调访问失效控件 / 定时器泄漏
+  if (IsObject(g_HttpCorrect)) {
+    try g_HttpCorrect.Abort()
+    g_HttpCorrect := ""
+  }
+  if (g_StreamPidCorrect > 0) {
+    try ProcessClose(g_StreamPidCorrect)
+    g_StreamPidCorrect := 0
+  }
+  if (g_StreamPidTranslate > 0) {
+    try ProcessClose(g_StreamPidTranslate)
+    g_StreamPidTranslate := 0
+  }
+  if (g_StreamPidChat > 0) {
+    try ProcessClose(g_StreamPidChat)
+    g_StreamPidChat := 0
+  }
+  g_CorrectPending := false
+  g_TranslatePending := false
+  g_ChatPending := false
+  g_TtsPlaying := false
+  g_HoverTarget := ""
+  SetTimer(CheckAsyncResults, 0)
+  SetTimer(CheckChatResult, 0)
+  SetTimer(CheckTtsHover, 0)
+
+  UnregisterGuiHotkeys(guiObj.Hwnd)
   guiObj.Destroy()
   g_MainGui := ""
   g_TranslateEditCtrl := ""
@@ -563,8 +613,10 @@ Gui_Hide(guiObj, *)
   if (g_MainGui != "") {
     g_MainGui.Hide()
     g_GuiHidden := true
+    ; 窗口隐藏时停止悬停朗读检测定时器，避免后台持续空转
+    SetTimer(CheckTtsHover, 0)
   }
-  
+
   ; 不再恢复剪贴板，避免覆盖用户的截图等内容
   ; A_Clipboard := g_OldClip
 }
@@ -598,6 +650,7 @@ Gui_Close(guiObj, *)
   g_TtsPlaying := false
   g_HoverTarget := ""
   SetTimer(CheckTtsHover, 0)
+  UnregisterGuiHotkeys(guiObj.Hwnd)
   guiObj.Destroy()
   g_MainGui := ""
   g_TranslateEditCtrl := ""
@@ -614,7 +667,7 @@ Gui_Close(guiObj, *)
 !SC029::
 {
   global g_MainGui, g_GuiHidden, g_OldClip, g_OrigEditCtrl, g_OriginalText, g_SelectedResult
-  global g_PrevForegroundHwnd
+  global g_PrevForegroundHwnd, g_IsChineseMode, g_QuestionEditCtrl
   
   ; 记录当前前台窗口，用于朗读时恢复焦点
   try {
@@ -644,6 +697,7 @@ Gui_Close(guiObj, *)
       newIsChinese := RegExMatch(text, "[\x{4e00}-\x{9fff}]")
       if (newIsChinese != g_IsChineseMode) {
         ; 语言模式改变，需要重新创建窗口
+        try UnregisterGuiHotkeys(g_MainGui.Hwnd)
         try g_MainGui.Destroy()
         g_MainGui := ""
         ShowMainGui(text)

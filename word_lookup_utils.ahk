@@ -120,7 +120,7 @@ CloseWordGui()
   global g_WL_StreamPid, g_WL_Pending, g_WL_StreamFile
   global g_WL_WordEdit, g_WL_ContextEdit
   global g_StreamPidChat, g_ChatPending, g_QuestionEditCtrl, g_AnswerEditCtrl, g_SendBtnCtrl
-  global g_TtsPlaying, g_HoverTarget, g_MainGui
+  global g_TtsPlaying, g_HoverTarget, g_MainGui, g_PromptDropdown, g_WL_AnkiBtn
 
   ; 终止请求
   if (g_WL_StreamPid > 0) {
@@ -181,7 +181,7 @@ CloseWordGui()
 ; ===== 预生成 TTS 音频（后台） =====
 WL_PregenTts(word)
 {
-  global g_WL_TtsFile, g_WL_TtsPid, g_WL_TtsWord
+  global g_WL_TtsFile, g_WL_TtsPid, g_WL_TtsWord, g_WL_TtsGenTick
 
   ; 终止上一次预生成
   if (g_WL_TtsPid > 0) {
@@ -205,13 +205,14 @@ WL_PregenTts(word)
   try {
     Run('edge-tts --voice en-US-AriaNeural --text "' . escapedText . '" --write-media "' . g_WL_TtsFile . '"', , "Hide", &outPid)
     g_WL_TtsPid := outPid
+    g_WL_TtsGenTick := A_TickCount
   }
 }
 
 ; ===== 强制单次朗读（右键触发） =====
 WL_PlayTtsOnce()
 {
-  global WL_CurrentWord, g_WL_TtsFile, g_WL_TtsPid, g_WL_TtsWord
+  global WL_CurrentWord, g_WL_TtsFile, g_WL_TtsPid, g_WL_TtsWord, g_WL_TtsGenTick
 
   text := Trim(WL_CurrentWord)
   if (text = "")
@@ -221,10 +222,13 @@ WL_PlayTtsOnce()
     WL_PregenTts(text)
   }
 
-  ; 非阻塞等待 edge-tts
+  ; 非阻塞等待 edge-tts（最多 8 秒，超时兜底，避免 edge-tts 卡死导致定时器永久轮询）
   if (g_WL_TtsPid > 0 && ProcessExist(g_WL_TtsPid)) {
-    SetTimer(WL_PlayTtsOnce, -100)
-    return
+    if (A_TickCount - g_WL_TtsGenTick < 8000) {
+      SetTimer(WL_PlayTtsOnce, -100)
+      return
+    }
+    try ProcessClose(g_WL_TtsPid)
   }
   g_WL_TtsPid := 0
 
@@ -280,7 +284,7 @@ WL_HandleRightClick()
 ; ===== 朗读完整语境句子 =====
 WL_PlaySentenceTts(sentence)
 {
-  global g_WL_TtsFile, g_WL_TtsPid, g_WL_TtsWord
+  global g_WL_TtsFile, g_WL_TtsPid, g_WL_TtsWord, g_WL_TtsGenTick
   
   ; 停止上一次预生成或朗读进程
   if (g_WL_TtsPid > 0) {
@@ -312,7 +316,8 @@ WL_PlaySentenceTts(sentence)
     ; 用高级微软 Aria 真人神经网络语音生成完整句子（真人语调，且多音字 100% 正确）
     Run('edge-tts --voice ' . voice . ' --text "' . escapedText . '" --write-media "' . g_WL_TtsFile . '"', , "Hide", &outPid)
     g_WL_TtsPid := outPid
-    
+    g_WL_TtsGenTick := A_TickCount
+
     ; 轮询播放
     SetTimer(WL_PlayTtsOnce_Check, -50)
   }
@@ -320,11 +325,14 @@ WL_PlaySentenceTts(sentence)
 
 WL_PlayTtsOnce_Check()
 {
-  global g_WL_TtsFile, g_WL_TtsPid
-  
+  global g_WL_TtsFile, g_WL_TtsPid, g_WL_TtsGenTick
+
   if (g_WL_TtsPid > 0 && ProcessExist(g_WL_TtsPid)) {
-    SetTimer(WL_PlayTtsOnce_Check, -100)
-    return
+    if (A_TickCount - g_WL_TtsGenTick < 8000) {
+      SetTimer(WL_PlayTtsOnce_Check, -100)
+      return
+    }
+    try ProcessClose(g_WL_TtsPid)
   }
   g_WL_TtsPid := 0
   
@@ -341,7 +349,7 @@ WL_PlayTtsOnce_Check()
 WL_NavHistory(dir)
 {
   global g_WL_History, g_WL_HistoryIdx, g_WL_WordEdit, g_WL_ContextEdit, g_WL_ResultCtrl
-  global WL_CurrentWord, WL_CurrentContext
+  global WL_CurrentWord, WL_CurrentContext, g_WL_LangMode
 
   if (g_WL_History.Length = 0)
     return
@@ -466,7 +474,9 @@ WL_SendToAnki(*)
             audioJson := ""
             if (g_WL_TtsFile != "" && FileExist(g_WL_TtsFile)) {
                 absPath := StrReplace(g_WL_TtsFile, "\", "\\")
-                audioJson := ',"audio": [{"path": "' . absPath . '", "filename": "ahk_tts_' . word . '.mp3", "fields": ["' . frontField . '"]}]'
+                ; 文件名安全化：去掉引号/反斜杠/空格等非法字符，避免破坏 JSON 报文与文件名
+                safeName := RegExReplace(word, "[^\w\x{4e00}-\x{9fff}]", "_")
+                audioJson := ',"audio": [{"path": "' . absPath . '", "filename": "ahk_tts_' . safeName . '.mp3", "fields": ["' . frontField . '"]}]'
             }
 
             ; 构建 JSON 报文

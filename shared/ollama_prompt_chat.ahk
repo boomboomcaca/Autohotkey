@@ -274,7 +274,13 @@ SavePromptItem(listBox, nameEdit, promptEdit)
   idx := listBox.Value
   if (idx <= 0 || idx > g_PromptList.Length)
     return
-  
+
+  ; 不能重命名/修改"无"选项（动态添加项，重命名会破坏列表状态并产生重复项）
+  if (g_PromptList[idx].name = "无") {
+    MsgBox("不能修改[无]选项", "提示", "Icon!")
+    return
+  }
+
   newName := Trim(nameEdit.Value)
   newPrompt := Trim(promptEdit.Value)
   
@@ -529,7 +535,11 @@ CheckChatResult()
     if (g_StreamFileChat != "" && FileExist(g_StreamFileChat)) {
       finalResult := Chat_ReadStreamContent(g_StreamFileChat)
     }
-    
+
+    ; 兜底：最终再读为空时沿用已流式累积的内容，避免用错误信息覆盖已成功的回答
+    if (finalResult = "" && g_StreamContentChat != "")
+      finalResult := g_StreamContentChat
+
     if (finalResult != "") {
       finalResult := StripEmoji(finalResult)
       if (g_AnswerEditCtrl != "")
@@ -579,12 +589,7 @@ Chat_ReadStreamContent(filePath)
     if (!InStr(line, "{"))
       continue
     if RegExMatch(line, '"content"\s*:\s*"((?:[^"\\]|\\.)*)"', &m) {
-      token := m[1]
-      token := StrReplace(token, "\n", "`n")
-      token := StrReplace(token, "\r", "`r")
-      token := StrReplace(token, "\t", "`t")
-      token := StrReplace(token, '\`"', '`"')
-      token := StrReplace(token, "\\\\", "\")
+      token := UnescapeApiJson(m[1])
       result .= token
     }
   }
@@ -611,6 +616,7 @@ Gui_Retry(*)
   newIsChinese := RegExMatch(newText, "[\x{4e00}-\x{9fff}]")
   if (newIsChinese != g_IsChineseMode) {
     ; 语言模式改变，需要重新创建窗口
+    try UnregisterGuiHotkeys(g_MainGui.Hwnd)
     try g_MainGui.Destroy()
     g_MainGui := ""
     ShowMainGui(newText)
@@ -672,8 +678,8 @@ Gui_ToggleSelect(*)
 
 Gui_PasteAsText(*)
 {
-  global g_OrigEditCtrl, g_QuestionEditCtrl
-  
+  global g_OrigEditCtrl, g_QuestionEditCtrl, g_WL_WordEdit
+
   ; 使用 Windows API 直接获取剪贴板文本（解决 PixPin OCR 延迟渲染问题）
   clipText := GetClipboardText()
   
@@ -731,11 +737,11 @@ GetClipboardText()
 
 Gui_ToggleFocus(*)
 {
-  global g_OrigEditCtrl, g_QuestionEditCtrl
-  
+  global g_OrigEditCtrl, g_QuestionEditCtrl, g_WL_WordEdit
+
   ; 获取当前焦点控件
   focusedHwnd := ControlGetFocus("A")
-  
+
   ; 在单词输入框、原文输入框和 AI 问题输入框之间切换
   if (IsSet(g_WL_WordEdit) && g_WL_WordEdit != "" && focusedHwnd = g_WL_WordEdit.Hwnd) {
     g_OrigEditCtrl.Focus()
@@ -837,13 +843,8 @@ ParseStreamData(rawContent, &accumulatedContent)
     
     ; OpenAI 格式: 提取 choices[0].delta.content 或 choices[0].message.content
     if RegExMatch(line, '"content"\s*:\s*"((?:[^"\\]|\\.)*)"', &m) {
-      token := m[1]
       ; 基础转义还原
-      token := StrReplace(token, "\n", "`n")
-      token := StrReplace(token, "\r", "`r")
-      token := StrReplace(token, "\t", "`t")
-      token := StrReplace(token, '\"', '"')
-      token := StrReplace(token, "\\", "\")
+      token := UnescapeApiJson(m[1])
       result .= token
     }
   }
