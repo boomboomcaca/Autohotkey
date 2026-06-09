@@ -128,7 +128,8 @@ ShowMainGui(original)
   global g_TtsOrigCtrl, g_TtsCorrectCtrl, g_TtsTranslateCtrl, g_TtsQuestionCtrl
   global g_ExplainEditCtrl, g_CorrectedText
   global g_QuestionEditCtrl, g_AnswerEditCtrl, g_SendBtnCtrl
-  
+  global g_PromptDropdown, g_PromptManageBtn
+
     ; 如果已有窗口存在，先关闭
   if (g_MainGui != "") {
     try UnregisterGuiHotkeys(g_MainGui.Hwnd)
@@ -627,6 +628,7 @@ Gui_Close(guiObj, *)
   global g_StreamPidCorrect, g_StreamPidTranslate, g_CorrectPending, g_TranslatePending
   global g_MainGui, g_TranslateEditCtrl, g_CorrectEditCtrl, g_OrigEditCtrl
   global g_StreamPidChat, g_ChatPending, g_QuestionEditCtrl, g_AnswerEditCtrl, g_SendBtnCtrl
+  global g_PromptDropdown
   
   ; 终止正在运行的 PowerShell 进程
   if (g_StreamPidCorrect > 0) {

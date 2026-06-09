@@ -50,7 +50,9 @@ RestorePrevForeground()
 ; 核心朗读函数：支持中英自动识别
 PlayTtsText(text, isRetry := false)
 {
-  global g_TtsProcPid, g_TtsRetryCount
+  ; 这三个必须声明 global：PollTtsPlay 读取它们做超时/播放判断；
+  ; 漏声明会写入局部，全局停留在 0/""，导致点击朗读 100ms 即“超时”、永不播放。
+  global g_TtsProcPid, g_TtsRetryCount, g_TtsProcStartTick, g_TtsPlayText, g_TtsTempFile
   static tempFile := A_Temp . "\ahk_tts_edge.mp3"
   
   if (!isRetry)
