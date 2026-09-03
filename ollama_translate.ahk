@@ -71,9 +71,20 @@ ShowMainGui(original)
   global g_ExplainEditCtrl, g_CorrectedText
   global g_QuestionEditCtrl, g_AnswerEditCtrl, g_SendBtnCtrl
   global g_PromptDropdown, g_PromptManageBtn
+  global g_StreamPidChat, g_ChatPending
 
-    ; 如果已有窗口存在，先关闭
+  ; 如果已有窗口存在，先关闭
   if (g_MainGui != "") {
+    ; 先停掉围绕旧窗口的异步任务：问答 curl 进程与轮询、悬停朗读检测。
+    ; 否则旧问题的回答会写进新窗口的回答框，悬停定时器也会一直引用已销毁的控件
+    if (g_StreamPidChat > 0) {
+      try ProcessClose(g_StreamPidChat)
+      g_StreamPidChat := 0
+    }
+    g_ChatPending := false
+    SetTimer(CheckChatResult, 0)
+    SetTimer(CheckTtsHover, 0)
+    try StopTts()
     try UnregisterGuiHotkeys(g_MainGui.Hwnd)
     try {
       g_MainGui.Destroy()
@@ -88,6 +99,12 @@ ShowMainGui(original)
   g_CorrectedText := ""
   g_SelectedResult := "correct"
   g_ExplainEditCtrl := ""
+  ; 重置朗读图标控件引用：中文模式不创建"原文/纠错"图标，英文模式同理，
+  ; 不重置会残留上一个已销毁窗口的控件对象，悬停检测拿到的是失效句柄
+  g_TtsOrigCtrl := ""
+  g_TtsCorrectCtrl := ""
+  g_TtsTranslateCtrl := ""
+  g_TtsQuestionCtrl := ""
   
   ; 判断中英文
   g_IsChineseMode := RegExMatch(original, "[\x{4e00}-\x{9fff}]")
@@ -152,11 +169,8 @@ ShowMainGui(original)
   
   ; ========== 右侧面板：AI 问答 ==========
   g_MainGui.AddText("x530 y10 w60 Section", "Prompt:")
-  promptList := ""
-  for name in g_PromptNames {
-    promptList .= (promptList = "" ? "" : "|") . name
-  }
-  g_PromptDropdown := g_MainGui.AddDropDownList("x+5 yp w280", StrSplit(promptList, "|"))
+  ; 直接传数组：先用 | 拼接再 StrSplit 会把名称里含 | 的模板拆成多项
+  g_PromptDropdown := g_MainGui.AddDropDownList("x+5 yp w280", g_PromptNames)
   if (g_SelectedPrompt != "")
     g_PromptDropdown.Text := g_SelectedPrompt
   g_PromptDropdown.OnEvent("Change", Gui_PromptChanged)
@@ -247,6 +261,7 @@ StartAsyncRequests(text, requestType := "default")
   global g_HttpCorrect, g_CorrectPending, g_TranslatePending, g_IsChineseMode
   global g_CorrectRequested, g_TranslateRequested, g_CurrentText
   global g_StreamPidCorrect, g_StreamPidTranslate
+  global g_CorrectStartTick
   
   ; 终止之前正在运行的请求
   if (IsObject(g_HttpCorrect)) {
@@ -276,6 +291,7 @@ StartAsyncRequests(text, requestType := "default")
       try UpdateTranslateResult("请求失败")
       return
     }
+    g_CorrectStartTick := A_TickCount
     g_CorrectPending := true
     g_TranslatePending := true
   }
@@ -319,29 +335,54 @@ CheckAsyncResults()
   global g_StreamFileCorrect, g_StreamFileTranslate
   global g_StreamContentCorrect, g_StreamContentTranslate
   global g_StreamPidCorrect, g_StreamPidTranslate
+  global g_CorrectStartTick
   
   ; 检查组合结果（一次调用同时返回纠错和翻译）
   if (g_CorrectPending && IsObject(g_HttpCorrect)) {
-    ; 性能优化: readyState=3 时仅显示提示文字，跳过开销高昂的 responseText 读取和 JSON 解析
-    ; 注意：占位符只写控件，不走 UpdateCorrectResult——后者会污染 g_CorrectResult/g_CorrectedText，
-    ; 导致请求未完成时按 Ctrl+Enter 强制替换会把"正在生成输出..."粘贴进用户文档
-    if (g_HttpCorrect.readyState == 3) {
-      try {
-        if (g_CorrectEditCtrl != "" && g_CorrectEditCtrl.Value != "正在生成输出...")
-          g_CorrectEditCtrl.Value := "正在生成输出..."
-      }
-    }
-    ; readyState=4: 请求完成，执行一次完整解析
-    else if (g_HttpCorrect.readyState == 4) {
-      try {
-        finalRes := ParseStreamData(g_HttpCorrect.responseText, &g_StreamContentCorrect)
-        if (finalRes != "") {
-          ParseCombinedResult(StripEmoji(finalRes))
-        }
+    readyState := 0
+    try readyState := g_HttpCorrect.readyState
+    if (readyState == 4) {
+      ; 请求完成，执行一次完整解析
+      status := 0
+      respText := ""
+      finalRes := ""
+      try status := g_HttpCorrect.status
+      try respText := g_HttpCorrect.responseText
+      try finalRes := ParseStreamData(respText, &g_StreamContentCorrect)
+      if (finalRes != "") {
+        try ParseCombinedResult(StripEmoji(finalRes))
+      } else {
+        ; 没拿到任何内容（HTTP 401/429 等错误、网络错误、空响应）必须给出提示，
+        ; 否则界面永远停在"正在处理..."，用户无从得知已经失败
+        if (status != 0 && status != 200)
+          errMsg := "请求失败 (HTTP " . status . "): " . SubStr(Trim(respText), 1, 200)
+        else
+          errMsg := "请求失败: 网络错误或响应为空，请检查网络/代理后重试"
+        try UpdateCorrectResult(errMsg)
+        try UpdateTranslateResult("请求失败")
       }
       g_CorrectPending := false
       g_TranslatePending := false
       g_HttpCorrect := "" ; 释放 COM 对象
+    }
+    else if (A_TickCount - g_CorrectStartTick > 90000) {
+      ; Msxml2.XMLHTTP 没有超时设置：服务端挂起时 readyState 会永远停在 1~3，
+      ; 轮询无限空转、界面一直显示"正在生成输出..."，这里手动中止
+      try g_HttpCorrect.Abort()
+      g_HttpCorrect := ""
+      g_CorrectPending := false
+      g_TranslatePending := false
+      try UpdateCorrectResult("请求失败: 超时（90 秒无响应），请重试")
+      try UpdateTranslateResult("请求失败")
+    }
+    else if (readyState == 3) {
+      ; 性能优化: readyState=3 时仅显示提示文字，跳过开销高昂的 responseText 读取和 JSON 解析
+      ; 注意：占位符只写控件，不走 UpdateCorrectResult——后者会污染 g_CorrectResult/g_CorrectedText，
+      ; 导致请求未完成时按 Ctrl+Enter 强制替换会把"正在生成输出..."粘贴进用户文档
+      try {
+        if (g_CorrectEditCtrl != "" && g_CorrectEditCtrl.Value != "正在生成输出...")
+          g_CorrectEditCtrl.Value := "正在生成输出..."
+      }
     }
   }
   
@@ -517,6 +558,7 @@ Gui_Apply(guiObj, *)
   SetTimer(CheckAsyncResults, 0)
   SetTimer(CheckChatResult, 0)
   SetTimer(CheckTtsHover, 0)
+  try StopTts()
 
   UnregisterGuiHotkeys(guiObj.Hwnd)
   guiObj.Destroy()
@@ -544,7 +586,7 @@ Gui_Apply(guiObj, *)
     result := g_CorrectResult
 
   ; 过滤错误信息和加载占位符（占位符精确匹配，避免误伤以"正在"开头的真实结果）
-  if (result != "" && !InStr(result, "失败") && result != "正在生成输出..." && result != "正在处理...") {
+  if (result != "" && !InStr(result, "失败") && SubStr(result, 1, 3) != "错误:" && result != "正在生成输出..." && result != "正在处理...") {
     A_Clipboard := result
     Sleep(30)
     Send("^a")
@@ -579,7 +621,7 @@ Gui_Close(guiObj, *)
   global g_StreamPidCorrect, g_StreamPidTranslate, g_CorrectPending, g_TranslatePending
   global g_MainGui, g_TranslateEditCtrl, g_CorrectEditCtrl, g_OrigEditCtrl
   global g_StreamPidChat, g_ChatPending, g_QuestionEditCtrl, g_AnswerEditCtrl, g_SendBtnCtrl
-  global g_PromptDropdown
+  global g_PromptDropdown, g_HttpCorrect
   
   ; 终止正在运行的 PowerShell 进程
   if (g_StreamPidCorrect > 0) {
@@ -596,6 +638,11 @@ Gui_Close(guiObj, *)
   }
   g_CorrectPending := false
   g_TranslatePending := false
+  ; 中止仍在进行的翻译请求（XMLHTTP 是异步的，不中止会在后台继续跑完）
+  if (IsObject(g_HttpCorrect)) {
+    try g_HttpCorrect.Abort()
+    g_HttpCorrect := ""
+  }
   g_ChatPending := false
   SetTimer(CheckAsyncResults, 0)
   SetTimer(CheckChatResult, 0)
@@ -603,6 +650,7 @@ Gui_Close(guiObj, *)
   g_TtsPlaying := false
   g_HoverTarget := ""
   SetTimer(CheckTtsHover, 0)
+  try StopTts()
   UnregisterGuiHotkeys(guiObj.Hwnd)
   guiObj.Destroy()
   g_MainGui := ""
@@ -621,6 +669,7 @@ Gui_Close(guiObj, *)
 {
   global g_MainGui, g_GuiHidden, g_OldClip, g_OrigEditCtrl, g_OriginalText, g_SelectedResult
   global g_PrevForegroundHwnd, g_IsChineseMode, g_QuestionEditCtrl
+  global g_TranslateResult, g_CorrectResult, g_CorrectedText
   
   ; 记录当前前台窗口，用于朗读时恢复焦点
   try {
@@ -632,6 +681,9 @@ Gui_Close(guiObj, *)
   if (g_MainGui != "" && !g_GuiHidden) {
     g_MainGui.Hide()
     g_GuiHidden := true
+    ; 与 Gui_Hide 保持一致：隐藏期间停止悬停朗读检测与朗读
+    SetTimer(CheckTtsHover, 0)
+    try StopTts()
     return
   }
   
@@ -662,6 +714,10 @@ Gui_Close(guiObj, *)
       global g_ExplainEditCtrl, g_AnswerEditCtrl
       g_CorrectRequested := false
       g_TranslateRequested := false
+      ; 清空上一次的结果：否则新请求返回前按 Ctrl+Enter 会把旧文本的结果粘贴出去
+      g_TranslateResult := ""
+      g_CorrectResult := ""
+      g_CorrectedText := ""
       g_OrigEditCtrl.Value := text
       g_OriginalText := text
       
@@ -680,6 +736,8 @@ Gui_Close(guiObj, *)
     g_MainGui.Show()
     WinActivate("ahk_id " g_MainGui.Hwnd)
     g_GuiHidden := false
+    ; Gui_Hide / 隐藏分支停掉了悬停朗读检测，恢复显示必须重新启动，否则隐藏再显示后悬停朗读失效
+    SetTimer(CheckTtsHover, 200)
     return
   }
   

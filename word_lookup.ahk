@@ -437,11 +437,8 @@ ShowWordPopup(word, context, posX, posY)
   g_WL_Gui.SetFont("s9 c333333", "Microsoft YaHei")
   g_WL_PromptLabel := g_WL_Gui.AddText("x358 y16 w50 Section", g_WL_LangMode = "EN" ? "Prompt:" : "提示词:")
   
-  promptList := ""
-  for name in g_PromptNames {
-    promptList .= (promptList = "" ? "" : "|") . name
-  }
-  g_PromptDropdown := g_WL_Gui.AddDropDownList("x+2 yp-1 w170", StrSplit(promptList, "|"))
+  ; 直接传数组：先用 | 拼接再 StrSplit 会把名称里含 | 的模板拆成多项
+  g_PromptDropdown := g_WL_Gui.AddDropDownList("x+2 yp-1 w170", g_PromptNames)
   if (g_SelectedPrompt != "")
     g_PromptDropdown.Text := g_SelectedPrompt
   g_PromptDropdown.OnEvent("Change", Gui_PromptChanged)
@@ -777,8 +774,9 @@ StartWordOllamaRequest(word, context, isNavigating := false, isRetry := false)
     curlCmd := 'curl.exe -s -N --connect-timeout 10 -m 60 -X POST "' . g_MistralEndpoint . '" -H "Content-Type: application/json" -K "' . curlCfg . '" -d "@' . jsonFile . '" -o "' . g_WL_StreamFile . '"'
     Run(curlCmd, , "Hide", &outPid)
     g_WL_StreamPid := outPid
-    global g_WL_StartTick
+    global g_WL_StartTick, g_WL_LastDataTick
     g_WL_StartTick := A_TickCount
+    g_WL_LastDataTick := A_TickCount
   } catch {
     return
   }
@@ -791,7 +789,7 @@ StartWordOllamaRequest(word, context, isNavigating := false, isRetry := false)
 CheckWordResult()
 {
   global g_WL_Pending, g_WL_StreamFile, g_WL_StreamContent, g_WL_StreamPid, g_WL_StreamFileSize
-  global g_WL_ResultCtrl, g_WL_Gui, g_WL_StartTick, g_WL_LangMode
+  global g_WL_ResultCtrl, g_WL_Gui, g_WL_StartTick, g_WL_LastDataTick, g_WL_LangMode
 
   if (!g_WL_Pending || g_WL_Gui = "") {
     SetTimer(CheckWordResult, 0)
@@ -806,8 +804,10 @@ CheckWordResult()
     isComplete := true
   }
 
-  ; 安全兜底：检查全局超时 (10 秒自动重试)
-  if (A_TickCount - g_WL_StartTick > 10000) {
+  ; 安全兜底：10 秒内没有收到任何新数据则判定超时（自动重试一次）。
+  ; 按"空闲时间"而不是总时长判定：流式输出正常进行时总时长常超过 10 秒，
+  ; 按总时长会把正在输出的回答中途截断、当作完整结果存进历史
+  if (A_TickCount - g_WL_LastDataTick > 10000) {
     isComplete := true
     isTimeout := true
   }
@@ -819,6 +819,7 @@ CheckWordResult()
     ; 性能优化: 仅在文件被 curl 追加了新内容时，才触发磁盘读取和高昂的 JSON 字符串解析操作
     if (curSize != g_WL_StreamFileSize) {
       g_WL_StreamFileSize := curSize
+      g_WL_LastDataTick := A_TickCount
 
       ; 实时读取流式内容并更新浮窗
       currentContent := WL_ReadStreamContent(g_WL_StreamFile)

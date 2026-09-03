@@ -579,7 +579,8 @@ XButton2::Send("!{Right}") ; 将鼠标的后退按钮映射为Alt + Right
 ;居中显示
 ^!down::
 { ; V1toV2: Added opening brace for [^!down]
-global ; V1toV2: Made function global
+  ; 注意：这里不用 global 模式——否则块内所有临时变量（GeminiHwnd/Width/mi 等）都会变成全局变量，
+  ; 与 F2 里的局部 GeminiHwnd 同名（#Warn LocalSameAsGlobal 会报警）
   ActiveWindowID := WinGetID("A") ; 活动窗口句柄
   if (!ActiveWindowID)
     return
@@ -627,21 +628,27 @@ GetGeminiWindow()
     hwnds := WinGetList("ahk_class Chrome_WidgetWin_1 ahk_exe chrome.exe")
     for hwnd in hwnds
     {
-        style := WinGetStyle(hwnd)
-        ; 必须是可见窗口
-        if !(style & 0x10000000)
-            continue
+        ; 枚举之后窗口可能已经关闭（如 Chrome 的临时气泡窗口），WinGet* 会抛 TargetError，
+        ; 不捕获会让 F2 / Ctrl+Alt+Down 整个热键报错中断
+        try {
+            style := WinGetStyle(hwnd)
+            ; 必须是可见窗口
+            if !(style & 0x10000000)
+                continue
 
-        ; 必须带标准标题栏（WS_CAPTION = 0xC00000）且尺寸像正常应用窗口：
-        ; Chrome 的拖拽预览、气泡提示等辅助窗口也是可见+空标题的 Chrome_WidgetWin_1，
-        ; 不过滤会被误认成 Gemini，导致 F2 隐藏错误的窗口
-        if ((style & 0xC00000) != 0xC00000)
-            continue
-        WinGetPos(, , &w, &h, hwnd)
-        if (w < 200 || h < 200)
-            continue
+            ; 必须带标准标题栏（WS_CAPTION = 0xC00000）且尺寸像正常应用窗口：
+            ; Chrome 的拖拽预览、气泡提示等辅助窗口也是可见+空标题的 Chrome_WidgetWin_1，
+            ; 不过滤会被误认成 Gemini，导致 F2 隐藏错误的窗口
+            if ((style & 0xC00000) != 0xC00000)
+                continue
+            WinGetPos(, , &w, &h, hwnd)
+            if (w < 200 || h < 200)
+                continue
 
-        title := WinGetTitle(hwnd)
+            title := WinGetTitle(hwnd)
+        } catch {
+            continue
+        }
 
         ; 你的 Gemini 作为 Chrome PWA 运行时，系统获取到的窗口标题正好为空字符串 ""
         if (title == "")

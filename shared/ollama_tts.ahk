@@ -8,6 +8,7 @@ global g_TtsPlayText := ""
 global g_TtsTempFile := ""
 global g_HoverTtsStartTick := 0
 global g_HoverTtsProcPid := 0  ; 悬停朗读(PlayTtsLoop/PollHoverTtsPlay)独立的 edge-tts 进程，避免与点击朗读互相覆盖
+global g_HoverTtsTempFile := A_Temp . "\ahk_tts_hover.mp3"  ; 悬停朗读音频文件（PlayTtsLoop/PollHoverTtsPlay/StopTts 共用）
 
 Gui_PlayOriginal(*)
 {
@@ -57,7 +58,8 @@ IsTtsPlaceholder(text)
     "正在切换语言并重新查询...", 1,
     "Querying...", 1, "⏳ Querying...", 1,
     "Switching language and re-querying...", 1)
-  return placeholders.Has(text) || RegExMatch(text, "^[⏳⏱⚠]")
+  ; 以状态图标或"请求失败/错误:"开头的都是界面提示文字，不朗读
+  return placeholders.Has(text) || RegExMatch(text, "^(⏳|⏱|⚠|请求失败|错误[:：])")
 }
 
 ; 将文本安全地作为 edge-tts 的命令行参数：
@@ -205,12 +207,18 @@ CheckTtsHover()
 
 StopTts()
 {
-  global g_TtsPlaying, g_HoverTarget, g_HoverTtsProcPid
+  global g_TtsPlaying, g_HoverTarget, g_HoverTtsProcPid, g_HoverTtsTempFile
   g_TtsPlaying := false
   g_HoverTarget := ""
+  SetTimer(PollHoverTtsPlay, 0)
   try {
-    if (g_HoverTtsProcPid > 0)
+    if (g_HoverTtsProcPid > 0 && ProcessExist(g_HoverTtsProcPid)) {
+      ; 生成被中途终止，落盘的文件是残缺的，必须删掉：
+      ; 否则下次悬停同一文本时 PlayTtsLoop 会因"文本未变且文件存在"直接播放残缺文件而不重新生成
       ProcessClose(g_HoverTtsProcPid)
+      ProcessWaitClose(g_HoverTtsProcPid, 1)
+      try FileDelete(g_HoverTtsTempFile)
+    }
     SoundPlay("NonExistent.zzz")
   }
   g_HoverTtsProcPid := 0
@@ -218,10 +226,10 @@ StopTts()
 
 PlayTtsLoop(isRetry := false)
 {
-  global g_TtsPlaying, g_HoverTarget, g_HoverTtsProcPid, g_HoverTtsRetryCount
+  global g_TtsPlaying, g_HoverTarget, g_HoverTtsProcPid, g_HoverTtsRetryCount, g_HoverTtsTempFile
   global g_OrigEditCtrl, g_CorrectEditCtrl, g_TranslateEditCtrl, g_QuestionEditCtrl
   static lastText := ""  ; 用于缓存上一次处理的文字
-  static tempFile := A_Temp . "\ahk_tts_hover.mp3"
+  tempFile := g_HoverTtsTempFile
 
   if (!isRetry)
     g_HoverTtsRetryCount := 0
@@ -262,6 +270,8 @@ PlayTtsLoop(isRetry := false)
         ; 上一个 edge-tts 未结束则两个进程并发写同一文件
         if (g_HoverTtsProcPid > 0) {
             try ProcessClose(g_HoverTtsProcPid)
+            ; 等旧进程真正退出并释放文件句柄，否则新的 edge-tts 可能打不开同名文件而生成失败
+            try ProcessWaitClose(g_HoverTtsProcPid, 1)
             g_HoverTtsProcPid := 0
         }
         try SoundPlay("NonExistent.zzz")
@@ -288,8 +298,8 @@ PlayTtsLoop(isRetry := false)
 
 PollHoverTtsPlay()
 {
-  global g_HoverTtsProcPid, g_HoverTtsStartTick, g_TtsPlaying
-  static tempFile := A_Temp . "\ahk_tts_hover.mp3"
+  global g_HoverTtsProcPid, g_HoverTtsStartTick, g_TtsPlaying, g_HoverTtsTempFile
+  tempFile := g_HoverTtsTempFile
 
   if (g_HoverTtsProcPid <= 0 || !g_TtsPlaying) {
     SetTimer(PollHoverTtsPlay, 0)

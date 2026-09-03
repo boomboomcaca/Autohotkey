@@ -161,6 +161,9 @@ CloseWordGui()
       Hotkey("NumpadEnter", WL_HandleEnter, "Off")
       Hotkey("!Left", "Off")
       Hotkey("!Right", "Off")
+      ; ShowWordPopup 里注册的其余窗口专属热键也要注销，否则会在已销毁的 hwnd 上累积
+      for hk in ["Tab", "^Tab", "^v", "^Backspace", "^s"]
+        try Hotkey(hk, "Off")
       HotIfWinActive()
     }
     ; 注销全局右键拦截
@@ -199,12 +202,12 @@ WL_PregenTts(word)
     return
 
   g_WL_TtsWord := text
-  ; 性能优化: 直接删除上一个文件，避免 glob 遍历 TEMP 目录
-  static prevTtsFile := ""
-  if (prevTtsFile != "" && prevTtsFile != g_WL_TtsFile)
-    try FileDelete(prevTtsFile)
+  ; 换用新文件名之前删除上一个音频文件（正在播放中删不掉的会静默跳过，退出时统一清理）。
+  ; 原先的 prevTtsFile 判断在每次调用时都恰好等于 g_WL_TtsFile，一个文件也删不掉，TEMP 里不断堆积
+  oldFile := g_WL_TtsFile
   g_WL_TtsFile := A_Temp . "\ahk_wl_tts_" . A_TickCount . ".mp3"
-  prevTtsFile := g_WL_TtsFile
+  if (oldFile != "" && oldFile != g_WL_TtsFile)
+    try FileDelete(oldFile)
 
   escapedText := EscapeTtsArg(text)
   try {
@@ -304,11 +307,11 @@ WL_PlaySentenceTts(sentence)
     
   g_WL_TtsWord := "" ; 重置当前单词缓存，防止与常规单字朗读缓存发生冲突
   
-  static prevSentenceFile := ""
-  if (prevSentenceFile != "" && prevSentenceFile != g_WL_TtsFile)
-    try FileDelete(prevSentenceFile)
+  ; 同 WL_PregenTts：换名前删掉上一个文件（上面已停止播放，句柄已释放）
+  oldFile := g_WL_TtsFile
   g_WL_TtsFile := A_Temp . "\ahk_wl_sentence_" . A_TickCount . ".mp3"
-  prevSentenceFile := g_WL_TtsFile
+  if (oldFile != "" && oldFile != g_WL_TtsFile)
+    try FileDelete(oldFile)
   
   isChinese := RegExMatch(sentence, "[\x{4e00}-\x{9fff}]")
   voice := isChinese ? "zh-CN-XiaoxiaoNeural" : "en-US-AriaNeural"
@@ -432,17 +435,18 @@ WL_SendToAnki(*)
     isAdd := InStr(g_WL_AnkiBtn.Text, "➕") || InStr(g_WL_AnkiBtn.Text, "添加")
 
     ; 从配置文件动态读取 Anki 卡片类型映射关系
+    ; （用 IniReadUtf8 而非 IniRead：文件是无 BOM 的 UTF-8，IniRead 会把中文读成乱码）
     deckName := "英语生词"
-    try deckName := IniRead(A_ScriptDir . "\ollama_config.ini", "Anki", "DeckName")
+    deckName := IniReadUtf8(A_ScriptDir . "\ollama_config.ini", "Anki", "DeckName", deckName)
     
     modelName := "问答题"
-    try modelName := IniRead(A_ScriptDir . "\ollama_config.ini", "Anki", "ModelName")
+    modelName := IniReadUtf8(A_ScriptDir . "\ollama_config.ini", "Anki", "ModelName", modelName)
     
     frontField := "正面"
-    try frontField := IniRead(A_ScriptDir . "\ollama_config.ini", "Anki", "FrontField")
+    frontField := IniReadUtf8(A_ScriptDir . "\ollama_config.ini", "Anki", "FrontField", frontField)
     
     backField := "背面"
-    try backField := IniRead(A_ScriptDir . "\ollama_config.ini", "Anki", "BackField")
+    backField := IniReadUtf8(A_ScriptDir . "\ollama_config.ini", "Anki", "BackField", backField)
     
     ; 兜底防乱码
     if (InStr(modelName, "闁") || InStr(modelName, "瓟") || InStr(modelName, "ue1be") || InStr(modelName, "u95c2")) {
@@ -564,13 +568,13 @@ WL_CheckAnkiStatus(word) {
 
         try {
             deckName := "英语生词"
-            try deckName := IniRead(A_ScriptDir . "\ollama_config.ini", "Anki", "DeckName")
+            deckName := IniReadUtf8(A_ScriptDir . "\ollama_config.ini", "Anki", "DeckName", deckName)
             if (InStr(deckName, "闁") || InStr(deckName, "ue1be")) {
                 deckName := "英语生词"
             }
 
             frontField := "正面"
-            try frontField := IniRead(A_ScriptDir . "\ollama_config.ini", "Anki", "FrontField")
+            frontField := IniReadUtf8(A_ScriptDir . "\ollama_config.ini", "Anki", "FrontField", frontField)
 
             escapeWord := StrReplace(StrReplace(checkWord, "\", "\\"), "`"", "\`"")
             query := 'deck:"' . deckName . '" ' . frontField . ':re:<h2>' . escapeWord . '</h2>'
@@ -605,4 +609,26 @@ WL_CheckAnkiStatus(word) {
 
     SetTimer(AnkiSyncCheck, -1) ; 负数 = 单次触发，延迟 1ms 后执行
 }
+
+; ===== 退出清理 =====
+; 终止本脚本仍在运行的子进程（edge-tts / curl），删除临时文件（含写有 API key 的 curl 配置文件）。
+; 不清理的话音频/流式文件会留在 TEMP 里，子进程也会在脚本退出后继续跑
+WL_CleanupOnExit(*)
+{
+  global g_WL_TtsPid, g_WL_StreamPid, g_StreamPidChat, g_TtsProcPid, g_HoverTtsProcPid
+  try SoundPlay("NonExistent.zzz")
+  for pid in [g_WL_TtsPid, g_WL_StreamPid, g_StreamPidChat, g_TtsProcPid, g_HoverTtsProcPid] {
+    ; PID 可能已被系统回收给别的程序，只终止确认是我们启动的 edge-tts / curl
+    try {
+      if (pid > 0 && ProcessExist(pid)) {
+        name := ProcessGetName(pid)
+        if (name = "edge-tts.exe" || name = "curl.exe")
+          ProcessClose(pid)
+      }
+    }
+  }
+  for name in ["ahk_wl_tts_*.mp3", "ahk_wl_sentence_*.mp3", "ahk_tts_edge.mp3", "ahk_tts_hover.mp3", "ahk_wl_stream_word.txt", "ahk_wl_request_word.json", "ahk_wl_curl.cfg", "ahk_chat_stream.txt", "ahk_chat_request.json", "ahk_chat_curl.cfg"]
+    try FileDelete(A_Temp . "\" . name)
+}
+OnExit(WL_CleanupOnExit)
 

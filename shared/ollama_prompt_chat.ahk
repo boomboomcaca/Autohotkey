@@ -36,9 +36,10 @@ prompt=请用简洁的语言总结以下内容的要点：
   ; 读取所有 prompt
   LoadPrompts()
   
-  ; 从配置文件读取上次选中的模板
-  savedPrompt := ""
-  try savedPrompt := IniRead(g_ConfigFile, "Settings", "SelectedPrompt", "")
+  ; 从配置文件读取上次选中的模板。
+  ; 不能用 IniRead：文件是无 BOM 的 UTF-8，IniRead 按系统 ANSI 代码页解析，
+  ; 中文模板名会变成乱码，HasPromptName 永远匹配不上，导致每次启动都回落到"无"
+  savedPrompt := IniReadUtf8(g_ConfigFile, "Settings", "SelectedPrompt", "")
   
   ; 如果保存的模板存在，使用它；否则使用第一个
   if (savedPrompt != "" && HasPromptName(savedPrompt))
@@ -169,8 +170,12 @@ SavePrompts()
     preserved .= "prompt=" . item.prompt . "`n`n"
   }
 
-  try FileDelete(g_ConfigFile)
-  FileAppend(preserved, g_ConfigFile, "UTF-8-RAW")
+  ; 先写临时文件再整体替换：原来的"删旧文件 + 追加写"若在写入阶段失败，
+  ; 整个配置（含 MistralApiKey 等）会一起丢失
+  tmpFile := g_ConfigFile . ".tmp"
+  try FileDelete(tmpFile)
+  FileAppend(preserved, tmpFile, "UTF-8-RAW")
+  FileMove(tmpFile, g_ConfigFile, 1)
 }
 
 GetPromptByName(name)
@@ -235,6 +240,10 @@ Gui_ManagePrompts(*)
   btnSave.OnEvent("Click", (*) => SavePromptItem(listBox, nameEdit, promptEdit))
   btnDelete.OnEvent("Click", (*) => DeletePrompt(listBox, nameEdit, promptEdit))
   btnClose.OnEvent("Click", (*) => CloseManageGui(manageGui))
+  ; 点标题栏 X 或按 Esc 也必须走 CloseManageGui：Gui 默认的 Close 行为只是隐藏窗口，
+  ; 对象不会销毁（泄漏），主窗口的下拉列表也不会刷新
+  manageGui.OnEvent("Close", (*) => CloseManageGui(manageGui))
+  manageGui.OnEvent("Escape", (*) => CloseManageGui(manageGui))
   
   ; 初始加载第一个
   if (g_PromptNames.Length > 0)
@@ -295,6 +304,18 @@ SavePromptItem(listBox, nameEdit, promptEdit)
   
   if (newName = "")
     return
+
+  ; 名称会作为 ini 段名 [Prompt_xxx] 写入：不能含方括号/换行；"无"是保留项；不能与其他模板重名
+  if (newName = "无" || RegExMatch(newName, "[\[\]\r\n]")) {
+    MsgBox("模板名称不能为[无]，也不能包含方括号或换行", "提示", "Icon!")
+    return
+  }
+  for i, n in g_PromptNames {
+    if (i != idx && n = newName) {
+      MsgBox("已存在同名模板：" . newName, "提示", "Icon!")
+      return
+    }
+  }
   
   ; 如果修改的是当前选中的，同步更新
   oldName := g_PromptList[idx].name
@@ -476,8 +497,9 @@ StartChatAsync(question)
     Run(curlCmd, , "Hide", &outPid)
     g_StreamPidChat := outPid
     g_ChatPending := true
-    global g_ChatStartTick, g_ChatStreamFileSize
+    global g_ChatStartTick, g_ChatStreamFileSize, g_ChatLastDataTick
     g_ChatStartTick := A_TickCount
+    g_ChatLastDataTick := A_TickCount
     g_ChatStreamFileSize := 0
   } catch Error as e {
     g_AnswerEditCtrl.Value := "请求启动失败: " . e.Message
@@ -511,9 +533,11 @@ CheckChatResult()
     isComplete := true
   }
   
-  ; 超时检测 (30 秒)
-  global g_ChatStartTick, g_ChatStreamFileSize
-  if (A_TickCount - g_ChatStartTick > 30000) {
+  ; 超时检测：按"空闲时间"（30 秒没有收到新数据）判定，而不是总时长。
+  ; 长回答（max_tokens 2048）流式输出经常超过 30 秒，按总时长会把仍在正常输出的回答
+  ; 中途截断并当作完成；总时长上限由 curl 的 -m 120 兜底
+  global g_ChatStartTick, g_ChatStreamFileSize, g_ChatLastDataTick
+  if (A_TickCount - g_ChatLastDataTick > 30000) {
     isComplete := true
     isTimeout := true
   }
@@ -525,6 +549,7 @@ CheckChatResult()
     
     if (curSize != g_ChatStreamFileSize) {
       g_ChatStreamFileSize := curSize
+      g_ChatLastDataTick := A_TickCount
       currentContent := Chat_ReadStreamContent(g_StreamFileChat)
       if (currentContent != "" && currentContent != g_StreamContentChat) {
         g_StreamContentChat := currentContent
@@ -615,7 +640,7 @@ Gui_Retry(*)
 {
   global g_OrigEditCtrl, g_TranslateEditCtrl, g_CorrectEditCtrl, g_IsChineseMode
   global g_CorrectLabelCtrl, g_TranslateLabelCtrl, g_SelectedResult, g_MainGui
-  global g_CorrectRequested, g_TranslateRequested, g_TranslateResult, g_CorrectResult
+  global g_CorrectRequested, g_TranslateRequested, g_TranslateResult, g_CorrectResult, g_CorrectedText
   global g_ExplainEditCtrl
   
   newText := Trim(g_OrigEditCtrl.Value)
@@ -638,6 +663,7 @@ Gui_Retry(*)
   g_TranslateRequested := false
   g_TranslateResult := ""
   g_CorrectResult := ""
+  g_CorrectedText := ""  ; 同步清空，否则新结果返回前按 Ctrl+Enter 会粘贴上一次的纠正文本
   
   ; 所有框都显示正在处理
   if (g_ExplainEditCtrl != "")
