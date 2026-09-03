@@ -76,6 +76,15 @@ LoadPrompts()
       }
       currentName := m[1]
       currentPrompt := ""
+    } else if (RegExMatch(line, "^\[")) {
+      ; 进入非 Prompt 段（[Settings]/[Anki] 等）：结束当前 prompt 收集，
+      ; 否则该段位于 Prompt 段之后时，其键值行会被误并入上一个 prompt 正文
+      if (currentName != "") {
+        g_PromptNames.Push(currentName)
+        g_PromptList.Push({name: currentName, prompt: currentPrompt})
+        currentName := ""
+        currentPrompt := ""
+      }
     } else if (RegExMatch(line, "^prompt=(.*)$", &m) && currentName != "") {
       currentPrompt := m[1]
     } else if (currentName != "" && currentPrompt != "" && !RegExMatch(line, "^\[")) {
@@ -433,37 +442,37 @@ StartChatAsync(question)
   }
   
   ; 转义 prompt 用于 JSON
-  prompt := fullQuestion
-  prompt := StrReplace(prompt, "\", "\\")
-  prompt := StrReplace(prompt, "`"", "\`"")
-  prompt := StrReplace(prompt, "`n", "\n")
-  prompt := StrReplace(prompt, "`r", "\r")
-  prompt := StrReplace(prompt, "`t", "\t")
-  
+  prompt := EscapeJsonForApi(fullQuestion)
+
   ; 系统提示：强制禁用 Markdown 和符号
   sysPrompt := "纯文本输出，不要用任何符号（如反斜杠、星号、井号）包裹或强调单词。"
-  
+
   g_StreamContentChat := ""
-  
+
   ; 构建 JSON (使用流式，OpenAI 格式)
   json := '{"model":"' . g_MistralModel . '","messages":[{"role":"system","content":"' . sysPrompt . '"},{"role":"user","content":"' . prompt . '"}],"temperature":0.7,"max_tokens":2048,"stream":true}'
-  
+
   ; 使用 curl.exe 调用 API（与 word_lookup 一致，兼容 TUN 代理）
   g_StreamFileChat := A_Temp . "\ahk_chat_stream.txt"
   jsonFile := A_Temp . "\ahk_chat_request.json"
+  curlCfg := A_Temp . "\ahk_chat_curl.cfg"
   try FileDelete(g_StreamFileChat)
   try FileDelete(jsonFile)
-  
+  try FileDelete(curlCfg)
+
   try {
     FileAppend(json, jsonFile, "UTF-8-RAW")
+    ; Authorization 头写入 curl 配置文件而非命令行：
+    ; 命令行参数可被本机任意进程通过进程列表查看，会暴露 API key
+    FileAppend('header = "Authorization: Bearer ' . g_MistralApiKey . '"`n', curlCfg, "UTF-8-RAW")
   } catch {
     g_AnswerEditCtrl.Value := "请求启动失败: 无法写入临时文件"
     try g_SendBtnCtrl.Enabled := true
     return
   }
-  
+
   try {
-    curlCmd := 'curl.exe -s -N --connect-timeout 10 -m 120 -X POST "' . g_MistralEndpoint . '" -H "Content-Type: application/json" -H "Authorization: Bearer ' . g_MistralApiKey . '" -d "@' . jsonFile . '" -o "' . g_StreamFileChat . '"'
+    curlCmd := 'curl.exe -s -N --connect-timeout 10 -m 120 -X POST "' . g_MistralEndpoint . '" -H "Content-Type: application/json" -K "' . curlCfg . '" -d "@' . jsonFile . '" -o "' . g_StreamFileChat . '"'
     Run(curlCmd, , "Hide", &outPid)
     g_StreamPidChat := outPid
     g_ChatPending := true
@@ -557,6 +566,7 @@ CheckChatResult()
     ; 清理临时文件
     try FileDelete(g_StreamFileChat)
     try FileDelete(A_Temp . "\ahk_chat_request.json")
+    try FileDelete(A_Temp . "\ahk_chat_curl.cfg")
   }
 }
 
@@ -857,7 +867,4 @@ ParseStreamData(rawContent, &accumulatedContent)
   return accumulatedContent
 }
 
-; 保留旧函数名作为兼容性代理，但逻辑改为 ParseStreamData
-IsStreamComplete(filePath) => FileExist(filePath) && InStr(FileRead(filePath), '"done"')
-ReadStreamFile(filePath, &accumulatedContent) => ParseStreamData(FileRead(filePath), &accumulatedContent)
 

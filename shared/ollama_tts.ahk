@@ -47,6 +47,30 @@ RestorePrevForeground()
   }
 }
 
+; 判断文本是否为界面占位提示（不应朗读）。
+; 必须精确/锚定匹配：用 InStr(text, "正在") 会误伤含"正在"的正常句子（如"我正在学习"）
+IsTtsPlaceholder(text)
+{
+  static placeholders := Map(
+    "正在处理...", 1, "正在思考...", 1, "正在生成输出...", 1,
+    "正在查询...", 1, "⏳ 正在查询...", 1,
+    "正在切换语言并重新查询...", 1,
+    "Querying...", 1, "⏳ Querying...", 1,
+    "Switching language and re-querying...", 1)
+  return placeholders.Has(text) || RegExMatch(text, "^[⏳⏱⚠]")
+}
+
+; 将文本安全地作为 edge-tts 的命令行参数：
+; 反斜杠换为空格（末尾的 \ 会与闭合引号结合破坏参数边界，且朗读反斜杠无意义）、
+; 换行压成空格、引号转义
+EscapeTtsArg(text)
+{
+  text := StrReplace(text, "\", " ")
+  text := StrReplace(text, "`r", "")
+  text := StrReplace(text, "`n", " ")
+  return StrReplace(text, '"', '\"')
+}
+
 ; 核心朗读函数：支持中英自动识别
 PlayTtsText(text, isRetry := false)
 {
@@ -59,9 +83,9 @@ PlayTtsText(text, isRetry := false)
     g_TtsRetryCount := 0
   
   text := Trim(text)
-  if (text = "" || InStr(text, "正在") || InStr(text, "切换后"))
+  if (text = "" || IsTtsPlaceholder(text))
     return
-  
+
   ; 1. 停止之前的播放和生成任务
   try {
     if (g_TtsProcPid > 0)
@@ -70,16 +94,14 @@ PlayTtsText(text, isRetry := false)
   }
   g_TtsProcPid := 0
   Sleep(50)
-  
+
   ; 2. 自动检测语言并选择语音
   isChinese := RegExMatch(text, "[\x{4e00}-\x{9fff}]")
   voice := isChinese ? "zh-CN-XiaoxiaoNeural" : "en-US-AriaNeural"
-  
+
   ; 3. 调用 edge-tts 生成音频
   RestorePrevForeground()
-  escapedText := StrReplace(text, '"', '\"')
-  escapedText := StrReplace(escapedText, '`n', ' ')
-  escapedText := StrReplace(escapedText, '`r', '')
+  escapedText := EscapeTtsArg(text)
 
   try {
     ; 使用非阻塞启动，并通过定时器轮询检测结束
@@ -122,7 +144,7 @@ PollTtsPlay()
   if (!ProcessExist(g_TtsProcPid)) {
     SetTimer(PollTtsPlay, 0)
     g_TtsProcPid := 0
-    if (FileExist(g_TtsTempFile) && !InStr(g_TtsPlayText, "正在") && !InStr(g_TtsPlayText, "切换后")) {
+    if (FileExist(g_TtsTempFile) && !IsTtsPlaceholder(g_TtsPlayText)) {
       SoundPlay(g_TtsTempFile) ; 异步非阻塞播放音频
     }
   }
@@ -226,18 +248,26 @@ PlayTtsLoop(isRetry := false)
     return
   }
 
-  if (text = "" || InStr(text, "正在") || InStr(text, "切换后"))
+  if (text = "" || IsTtsPlaceholder(text))
     return
 
   isChinese := RegExMatch(text, "[\x{4e00}-\x{9fff}]")
   voice := isChinese ? "zh-CN-XiaoxiaoNeural" : "en-US-AriaNeural"
-  
+
   try {
     ; 核心优化：如果文字没变且文件存在，则不重新生成 (如果是重试则强制重新生成)
     if (text != lastText || !FileExist(tempFile) || isRetry) {
-        escapedText := StrReplace(text, '"', '\"')
-        escapedText := StrReplace(escapedText, '`n', ' ')
-        
+        ; 必须先终止上一个生成进程并停止播放：
+        ; SoundPlay 播放中会锁住 tempFile，不停止则新的 edge-tts 写入失败、之后播的还是旧内容；
+        ; 上一个 edge-tts 未结束则两个进程并发写同一文件
+        if (g_HoverTtsProcPid > 0) {
+            try ProcessClose(g_HoverTtsProcPid)
+            g_HoverTtsProcPid := 0
+        }
+        try SoundPlay("NonExistent.zzz")
+
+        escapedText := EscapeTtsArg(text)
+
         ; 异步非阻塞生成音频
         Run('edge-tts --voice ' . voice . ' --text "' . escapedText . '" --write-media "' . tempFile . '"', , "Hide", &outPid)
         g_HoverTtsProcPid := outPid

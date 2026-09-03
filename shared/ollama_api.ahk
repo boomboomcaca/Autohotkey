@@ -1,24 +1,6 @@
 ; ===== Ollama/Mistral API 共享核心模块 =====
-; 统一处理所有 AI API 调用，消除代码重复
-
-; ===== API 配置 =====
-GetApiConfig()
-{
-    global g_MistralApiKey, g_MistralModel, g_MistralEndpoint
-
-    ; 从配置文件读取（如果还未读取）
-    if (!IsSet(g_MistralApiKey) || g_MistralApiKey = "") {
-        g_MistralApiKey := IniRead(A_ScriptDir . "\ollama_config.ini", "Settings", "MistralApiKey", "")
-    }
-    if (!IsSet(g_MistralModel) || g_MistralModel = "") {
-        g_MistralModel := IniRead(A_ScriptDir . "\ollama_config.ini", "Settings", "MistralModel", "mistral-large-latest")
-    }
-    if (!IsSet(g_MistralEndpoint) || g_MistralEndpoint = "") {
-        g_MistralEndpoint := IniRead(A_ScriptDir . "\ollama_config.ini", "Settings", "MistralEndpoint", "https://api.mistral.ai/v1/chat/completions")
-    }
-
-    return {apiKey: g_MistralApiKey, model: g_MistralModel, endpoint: g_MistralEndpoint}
-}
+; 统一处理 JSON 转义、文本清理和 Prompt 模板
+; （API 配置 g_Mistral* 由 ollama_translate.ahk 顶层从 ini 读取，各调用方直接使用全局变量）
 
 ; ===== JSON 转义（核心逻辑）=====
 EscapeJsonForApi(text)
@@ -47,168 +29,28 @@ UnescapeApiJson(text)
     return text
 }
 
-; ===== 构建标准 API JSON =====
-BuildApiJson(prompt, model?, endpoint?, temperature := 0, maxTokens := 1024, stream := false)
-{
-    config := GetApiConfig()
-    model := model ?? config.model
-    endpoint := endpoint ?? config.endpoint
-
-    ; 系统提示：强制禁用 Markdown 和符号
-    sysPrompt := "纯文本输出，不要用任何符号（如反斜杠、星号、井号）包裹或强调单词。"
-
-    escapedPrompt := EscapeJsonForApi(prompt)
-
-    json := '{"model":"' . model . '","messages":[{"role":"system","content":"' . sysPrompt . '"},{"role":"user","content":"' . escapedPrompt . '"}],"temperature":' . temperature . ',"max_tokens":' . maxTokens . ',"stream":' . (stream ? "true" : "false") . '}'
-
-    return json
-}
-
-; ===== 同步调用 API（使用 WinHttp）=====
-CallApiSync(prompt, model?, timeout := 30)
-{
-    config := GetApiConfig()
-    model := model ?? config.model
-    endpoint := endpoint ?? config.endpoint
-
-    escapedPrompt := EscapeJsonForApi(prompt)
-    sysPrompt := "纯文本输出，不要用任何符号（如反斜杠、星号、井号）包裹或强调单词。"
-
-    json := '{"model":"' . model . '","messages":[{"role":"system","content":"' . sysPrompt . '"},{"role":"user","content":"' . escapedPrompt . '"}],"temperature":0,"max_tokens":1024,"stream":false}'
-
-    try {
-        http := ComObject("WinHttp.WinHttpRequest.5.1")
-        http.Open("POST", endpoint, false)
-        http.SetRequestHeader("Content-Type", "application/json; charset=utf-8")
-        http.SetRequestHeader("Authorization", "Bearer " . config.apiKey)
-        http.Send(json)
-        http.WaitForResponse(timeout)
-
-        response := http.ResponseText
-
-        ; 解析 OpenAI/Mistral 格式响应
-        if RegExMatch(response, '"content"\s*:\s*"((?:[^"\\]|\\.)*)"', &m)
-            result := m[1]
-        else
-            return "解析失败: " . SubStr(response, 1, 200)
-
-        ; 转义还原
-        result := UnescapeApiJson(result)
-
-        result := Trim(result)
-        return StripEmoji(result)
-    } catch Error as e {
-        return "请求失败: " . e.Message
-    }
-}
-
-; ===== 异步调用 API（使用 curl，流式响应）=====
-CallApiAsync(prompt, streamFile, &outPid, model?, temperature := 0, maxTokens := 1024)
-{
-    config := GetApiConfig()
-    model := model ?? config.model
-    endpoint := endpoint ?? config.endpoint
-
-    ; 构建 JSON
-    json := BuildApiJson(prompt, model, endpoint, temperature, maxTokens, true)
-
-    ; 写入临时文件
-    jsonFile := A_Temp . "\ahk_api_request.json"
-    try FileDelete(streamFile)
-    try FileDelete(jsonFile)
-
-    try {
-        FileAppend(json, jsonFile, "UTF-8-RAW")
-    } catch {
-        return false
-    }
-
-    ; 使用 curl.exe 调用 API（兼容 TUN 代理）
-    try {
-        curlCmd := 'curl.exe -s -N --connect-timeout 10 -m 120 -X POST "' . endpoint . '" -H "Content-Type: application/json" -H "Authorization: Bearer ' . config.apiKey . '" -d "@' . jsonFile . '" -o "' . streamFile . '"'
-        Run(curlCmd, , "Hide", &outPid)
-        return true
-    } catch {
-        return false
-    }
-}
-
-; ===== 读取流式响应内容 =====
-ReadStreamContent(filePath)
-{
-    if (!FileExist(filePath))
-        return ""
-
-    try {
-        f := FileOpen(filePath, "r", "UTF-8")
-        if (!f)
-            return ""
-        content := f.Read()
-        f.Close()
-    } catch {
-        return ""
-    }
-
-    ; 解析 OpenAI SSE 流式 JSON
-    result := ""
-    Loop Parse, content, "`n", "`r"
-    {
-        line := Trim(A_LoopField)
-        if (line = "")
-            continue
-
-        ; OpenAI SSE 格式: 每行以 "data: " 开头
-        if (SubStr(line, 1, 6) = "data: ")
-            line := SubStr(line, 7)
-
-        ; 跳过 [DONE] 标记
-        if (line = "[DONE]")
-            continue
-
-        if (!InStr(line, "{"))
-            continue
-
-        ; 检测错误
-        if RegExMatch(line, '"error"\s*:\s*\{[^}]*"message"\s*:\s*"((?:[^"\\]|\\.)*)"', &m) {
-            errorMsg := m[1]
-            errorMsg := StrReplace(errorMsg, "\n", "`n")
-            errorMsg := StrReplace(errorMsg, '\"', '"')
-            return "错误: " . errorMsg
-        }
-
-        ; 提取 content
-        if RegExMatch(line, '"content"\s*:\s*"((?:[^"\\]|\\.)*)"', &m) {
-            token := UnescapeApiJson(m[1])
-            result .= token
-        }
-    }
-
-    result := Trim(result)
-    result := RegExReplace(result, "(\r?\n\s*){2,}", "`n")
-
-    return result
-}
-
-; ===== 清理临时文件 =====
-CleanupApiTempFiles(streamFile)
-{
-    try FileDelete(streamFile)
-    try FileDelete(A_Temp . "\ahk_api_request.json")
-}
-
 ; ===== 过滤 Emoji 和不可渲染的 Unicode 字符 =====
 ; 注意：此函数是全局唯一的，所有模块通过 Include 共享
 StripEmoji_FromApiModule(text)
 {
     ; 移除零宽字符、变体选择符、对象替换字符、装饰符号
     text := RegExReplace(text, "[\x{200B}-\x{200F}\x{200D}\x{2060}-\x{206F}\x{FEFF}\x{FFFC}\x{FFFD}\x{FE00}-\x{FE0F}\x{2600}-\x{27BF}\x{2B50}-\x{2B55}]", "")
-    ; 移除补充平面字符（Emoji 等）：过滤 UTF-16 代理对
+    ; 移除补充平面字符（Emoji 等），但保留 CJK 扩展区（0x20000-0x3FFFF）的生僻汉字，
+    ; 否则像 "𠀀" 这类扩展 B 区汉字会被连同 Emoji 一起静默删除
     result := ""
-    Loop Parse, text {
-        cp := Ord(A_LoopField)
-        if (cp >= 0xD800 && cp <= 0xDFFF)
-            continue
-        result .= A_LoopField
+    i := 1
+    len := StrLen(text)
+    while (i <= len) {
+        cp := Ord(SubStr(text, i, 2))  ; 完整代理对时返回补充平面码点（>= 0x10000）
+        if (cp >= 0x10000) {
+            if (cp >= 0x20000 && cp <= 0x3FFFF)
+                result .= SubStr(text, i, 2)
+            i += 2
+        } else {
+            if !(cp >= 0xD800 && cp <= 0xDFFF)  ; 孤立代理项直接丢弃
+                result .= SubStr(text, i, 1)
+            i++
+        }
     }
     return result
 }
@@ -217,30 +59,6 @@ StripEmoji_FromApiModule(text)
 StripEmoji(text) => StripEmoji_FromApiModule(text)
 
 ; ===== 预设 Prompt 模板 =====
-
-; 翻译（中→英）
-GetTranslatePromptZhToEn(text)
-{
-    return "Translate to English. Keep the exact same formatting, including punctuation marks, line breaks, and spacing. Output only the translation:`n" . text
-}
-
-; 翻译（英→中）
-GetTranslatePromptEnToZh(text)
-{
-    return "Translate to Chinese. Keep the exact same formatting, including punctuation marks, line breaks, and spacing. Output only the translation:`n" . text
-}
-
-; 英文纠错
-GetCorrectPromptEnglish(text)
-{
-    return "Correct this English text for a Chinese learner.`n`nRules:`n1. First line: ONLY the corrected sentence, nothing else`n2. Second line: exactly three dashes: ---`n3. Then list errors in Chinese: 错误1: 原文 → 修正 (解释)`n`nExample output:`nI am a real team member.`n---`n错误1: i → I (句首字母需要大写)`n错误2: real team → a real team (需要冠词 a)`n`nNow correct: " . text
-}
-
-; 中文润色
-GetCorrectPromptChinese(text)
-{
-    return "You are a Chinese language tutor. Correct and improve the following Chinese text. Fix grammar, punctuation, and improve expression while keeping the original meaning. Output only the corrected text without any explanation:`n" . text
-}
 
 ; 单词英英释义
 GetWordLookupPromptEn(word, context)

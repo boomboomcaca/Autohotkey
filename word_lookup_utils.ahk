@@ -120,7 +120,7 @@ CloseWordGui()
   global g_WL_StreamPid, g_WL_Pending, g_WL_StreamFile
   global g_WL_WordEdit, g_WL_ContextEdit
   global g_StreamPidChat, g_ChatPending, g_QuestionEditCtrl, g_AnswerEditCtrl, g_SendBtnCtrl
-  global g_TtsPlaying, g_HoverTarget, g_MainGui, g_PromptDropdown, g_WL_AnkiBtn
+  global g_TtsPlaying, g_HoverTarget, g_MainGui, g_PromptDropdown, g_WL_AnkiBtn, g_OrigEditCtrl
 
   ; 终止请求
   if (g_WL_StreamPid > 0) {
@@ -144,9 +144,16 @@ CloseWordGui()
   ; 彻底清理临时文件
   try FileDelete(g_WL_StreamFile)
   try FileDelete(A_Temp . "\ahk_wl_request_word.json")
+  try FileDelete(A_Temp . "\ahk_wl_curl.cfg")
 
   ; 销毁 GUI
   if (g_WL_Gui != "") {
+    ; 共享控件变量（g_QuestionEditCtrl/g_AnswerEditCtrl 等）同时被翻译主窗口使用：
+    ; 仅当它们仍指向本浮窗（g_MainGui 即 g_WL_Gui）时才清空。
+    ; 若翻译窗口在浮窗之后打开过，这些变量已指向翻译窗口的控件，
+    ; 粗暴置空会使翻译窗口的 Tab/^v/发送/Enter 访问空引用而抛错
+    sharedOwnedByUs := false
+    try sharedOwnedByUs := (g_MainGui != "" && g_MainGui.Hwnd == g_WL_Gui.Hwnd)
     try {
       HotIfWinActive("ahk_id " g_WL_Gui.Hwnd)
       Hotkey("Escape", WL_HandleEsc, "Off")
@@ -164,19 +171,17 @@ CloseWordGui()
     g_WL_TitleCtrl := ""
     g_WL_WordEdit := ""
     g_WL_ContextEdit := ""
-    g_QuestionEditCtrl := ""
-    g_AnswerEditCtrl := ""
-    g_SendBtnCtrl := ""
-    g_PromptDropdown := ""
-    g_MainGui := ""
     g_WL_AnkiBtn := ""
+    if (sharedOwnedByUs) {
+      g_QuestionEditCtrl := ""
+      g_AnswerEditCtrl := ""
+      g_SendBtnCtrl := ""
+      g_PromptDropdown := ""
+      g_MainGui := ""
+      g_OrigEditCtrl := ""  ; 它指向本浮窗的 g_WL_ContextEdit，一并清理
+    }
   }
 }
-
-; ===== 兼容性辅助函数 (供 ollama_prompt_chat.ahk 使用) =====
-
-; IsStreamComplete 已移至共享库
-
 
 ; ===== 预生成 TTS 音频（后台） =====
 WL_PregenTts(word)
@@ -201,7 +206,7 @@ WL_PregenTts(word)
   g_WL_TtsFile := A_Temp . "\ahk_wl_tts_" . A_TickCount . ".mp3"
   prevTtsFile := g_WL_TtsFile
 
-  escapedText := StrReplace(text, '"', '\"')
+  escapedText := EscapeTtsArg(text)
   try {
     Run('edge-tts --voice en-US-AriaNeural --text "' . escapedText . '" --write-media "' . g_WL_TtsFile . '"', , "Hide", &outPid)
     g_WL_TtsPid := outPid
@@ -308,10 +313,8 @@ WL_PlaySentenceTts(sentence)
   isChinese := RegExMatch(sentence, "[\x{4e00}-\x{9fff}]")
   voice := isChinese ? "zh-CN-XiaoxiaoNeural" : "en-US-AriaNeural"
   
-  escapedText := StrReplace(sentence, '"', '\"')
-  escapedText := StrReplace(escapedText, '`r', '')
-  escapedText := StrReplace(escapedText, '`n', ' ')
-  
+  escapedText := EscapeTtsArg(sentence)
+
   try {
     ; 用高级微软 Aria 真人神经网络语音生成完整句子（真人语调，且多音字 100% 正确）
     Run('edge-tts --voice ' . voice . ' --text "' . escapedText . '" --write-media "' . g_WL_TtsFile . '"', , "Hide", &outPid)

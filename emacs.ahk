@@ -4,6 +4,9 @@
 if !A_IsAdmin {
     try {
         Run '*RunAs "' A_AhkPath '" "' A_ScriptFullPath '"'
+    } catch {
+        ; UAC 提权被拒绝：给出提示再退出，避免双击脚本后无声无息地消失
+        MsgBox("脚本需要管理员权限运行（UAC 提权被拒绝），即将退出。", "AI Assistant", "Icon! T5")
     }
     ExitApp()
 }
@@ -23,8 +26,6 @@ InstallMouseHook()
 ; The following line is a contribution of NTEmacs wiki http://www49.atwiki.jp/ntemacs/pages/20.html
 SetKeyDelay(0)
 
-; turns to be 1 when ctrl-x is pressed
-is_pre_x := 0
 ; turns to be 1 when ctrl-space is pressed
 is_pre_spc := 0
 
@@ -162,30 +163,6 @@ redo()
 {
   Send("+^z")
   global is_pre_spc := ""
-  Return
-}
-find_file()
-{
-  Send("^o")
-  global is_pre_x := ""
-  Return
-}
-save_buffer()
-{
-  Send("^s")
-  global is_pre_x := ""
-  Return
-}
-kill_emacs()
-{
-  Send("!{F4}")
-  global is_pre_x := ""
-  Return
-}
-; C-x 前缀超时自动复位，避免按下 C-x 后未跟随 C-f/C-s 导致前缀“粘住”
-ResetPreX()
-{
-  global is_pre_x := 0
   Return
 }
 move_beginning_of_line()
@@ -385,12 +362,7 @@ global ; V1toV2: Made function global
   If is_target()
     Send(A_ThisHotkey)
   Else
-  {
-    If is_pre_x
-      find_file()
-    Else
-      forward_char()
-  }
+    forward_char()
 Return
 } ; V1toV2: Added closing brace for [^f]
 ^d::
@@ -453,12 +425,7 @@ global ; V1toV2: Made function global
   If is_target()
     Send(A_ThisHotkey)
   Else
-  {
-    If is_pre_x
-      save_buffer()
-    Else
-      isearch_current_file()
-  }
+    isearch_current_file()
 Return
 } ; V1toV2: Added closing brace for [^s]
 ^+s::
@@ -479,19 +446,10 @@ global ; V1toV2: Made function global
     kill_region()
 Return
 } ; V1toV2: Added closing brace for [^w]
-; C-x 前缀键：按下后 1.5 秒内按 C-f / C-s 触发 find_file / save_buffer，否则自动取消
-^x::
-{
-global
-  If is_target()
-    Send(A_ThisHotkey)
-  Else
-  {
-    is_pre_x := 1
-    SetTimer(ResetPreX, -1500)
-  }
-Return
-}
+; 注意：这里故意不注册 ^x:: 热键，Ctrl+X 保持系统默认的剪切功能。
+; （曾尝试把 C-x 实现为 Emacs 前缀键以支持 C-x C-f / C-x C-s，
+;   但那会吞掉所有普通窗口的 Ctrl+X 剪切，得不偿失，已回退，
+;   相关的 is_pre_x 前缀机制及 find_file/save_buffer 函数已一并移除。）
 !w::
 { ; V1toV2: Added opening brace for [!w]
 global ; V1toV2: Made function global
@@ -669,12 +627,22 @@ GetGeminiWindow()
     hwnds := WinGetList("ahk_class Chrome_WidgetWin_1 ahk_exe chrome.exe")
     for hwnd in hwnds
     {
+        style := WinGetStyle(hwnd)
         ; 必须是可见窗口
-        if !(WinGetStyle(hwnd) & 0x10000000)
+        if !(style & 0x10000000)
             continue
-            
+
+        ; 必须带标准标题栏（WS_CAPTION = 0xC00000）且尺寸像正常应用窗口：
+        ; Chrome 的拖拽预览、气泡提示等辅助窗口也是可见+空标题的 Chrome_WidgetWin_1，
+        ; 不过滤会被误认成 Gemini，导致 F2 隐藏错误的窗口
+        if ((style & 0xC00000) != 0xC00000)
+            continue
+        WinGetPos(, , &w, &h, hwnd)
+        if (w < 200 || h < 200)
+            continue
+
         title := WinGetTitle(hwnd)
-        
+
         ; 你的 Gemini 作为 Chrome PWA 运行时，系统获取到的窗口标题正好为空字符串 ""
         if (title == "")
         {
@@ -683,6 +651,105 @@ GetGeminiWindow()
         }
     }
     return 0
+}
+
+; 窗口完全（或大半）落在当前虚拟屏幕之外时，把它移回主屏工作区中央。
+; RDP 连接会把会话分辨率/布局改成客户端的，而隐藏中的窗口不会被系统重新摆放，
+; WinShow 后可能整个落在已不存在的屏幕区域上，表现为"按 F2 没反应"
+EnsureWindowOnScreen(hwnd)
+{
+    try {
+        WinGetPos(&x, &y, &w, &h, "ahk_id " . hwnd)
+        vx := SysGet(76), vy := SysGet(77), vw := SysGet(78), vh := SysGet(79)
+        ix := Max(0, Min(x + w, vx + vw) - Max(x, vx))
+        iy := Max(0, Min(y + h, vy + vh) - Max(y, vy))
+        if (ix * iy >= w * h / 2)
+            return
+        MonitorGetWorkArea(MonitorGetPrimary(), &wl, &wt, &wr, &wb)
+        newW := Min(w, wr - wl), newH := Min(h, wb - wt)
+        WinMove(wl + ((wr - wl) - newW) // 2, wt + ((wb - wt) - newH) // 2, newW, newH, "ahk_id " . hwnd)
+    }
+}
+
+; 通过 UIA 定位 Gemini 输入框（窗口底部最靠下的可聚焦编辑框）并点击聚焦。
+; 坐标来自元素实际位置，RDP 会话下 DPI/分辨率变化时依然命中；
+; 轮询等待输入框出现，覆盖 RDP 位图远传导致 Chrome 渲染变慢的情况
+FocusGeminiInput(hwnd, timeoutMs := 2500)
+{
+    deadline := A_TickCount + timeoutMs
+    while (A_TickCount < deadline)
+    {
+        try {
+            WinGetPos(&wx, &wy, &ww, &wh, "ahk_id " . hwnd)
+            root := UIA.ElementFromHandle(hwnd)
+            best := ""
+            bestLoc := ""
+            bestBottom := -2147483648
+            for e in root.FindElements({Type:"Edit"})
+            {
+                try {
+                    if (!e.IsKeyboardFocusable || e.IsOffscreen)
+                        continue
+                    loc := e.Location
+                    if (loc.w < 50 || loc.h < 10)
+                        continue
+                    ; 只接受"输入框形状"的候选：高度有限且贴近窗口底部。
+                    ; Gemini 的 Canvas/文档面板也是可聚焦 Edit，但接近全窗口高，
+                    ; 若误选中它，后面的 ^a/^v 会覆盖用户文档内容
+                    if (loc.h > wh * 0.4 || loc.y + loc.h < wy + wh / 2)
+                        continue
+                    if (loc.y + loc.h > bestBottom)
+                    {
+                        bestBottom := loc.y + loc.h
+                        best := e
+                        bestLoc := loc
+                    }
+                }
+            }
+            if (best)
+            {
+                try best.SetFocus()
+                CoordMode("Mouse", "Screen")
+                Click(bestLoc.x + (bestLoc.w // 2), bestLoc.y + (bestLoc.h // 2))
+                Sleep(100)
+                return true
+            }
+        }
+        Sleep(100)
+    }
+    return false
+}
+
+; 轮询等待 Gemini 输入框注册到粘贴内容后再回车。
+; Gemini 是 contenteditable + React，粘贴到"发送按钮可用"之间有延迟；
+; 通过 UIA 读取底部输入框的文本值，非空即认为可以安全发送。
+; UIA 不可用时返回 false，由调用方按固定等待兜底（不影响原有流程）。
+WaitGeminiInputReady(hwnd, timeoutMs := 1200)
+{
+    deadline := A_TickCount + timeoutMs
+    while (A_TickCount < deadline)
+    {
+        try {
+            WinGetPos(&wx, &wy, &ww, &wh, "ahk_id " . hwnd)
+            root := UIA.ElementFromHandle(hwnd)
+            for e in root.FindElements({Type:"Edit"})
+            {
+                try {
+                    if (!e.IsKeyboardFocusable || e.IsOffscreen)
+                        continue
+                    loc := e.Location
+                    if (loc.w < 50 || loc.h < 10)
+                        continue
+                    if (loc.h > wh * 0.4 || loc.y + loc.h < wy + wh / 2)
+                        continue
+                    if (Trim(e.Value) != "")
+                        return true
+                }
+            }
+        }
+        Sleep(60)
+    }
+    return false
 }
 
 ; F2 自动寻找并切换 Gemini 窗口的显示/隐藏（最小化/激活）
@@ -754,6 +821,7 @@ F2::
             DetectHiddenWindows(true)
             WinShow("ahk_id " . GeminiHwnd)
             DetectHiddenWindows(false)
+            EnsureWindowOnScreen(GeminiHwnd)
             Sleep(150)
             WinActivate("ahk_id " . GeminiHwnd)
         }
@@ -791,20 +859,27 @@ F2::
                     ; 保存鼠标原位置，操作完成后恢复
                     MouseGetPos(&origX, &origY)
 
-                    ; 优化：WinWaitActive 已等待窗口激活，300ms 足够 Gemini 渲染输入框
-                    Sleep(300)
-                    ; 点击输入框区域（底部中央，偏移 -85 避免遮挡）
-                    WinGetPos(&gx, &gy, &gw, &gh, "ahk_id " . GeminiHwnd)
-                    CoordMode("Mouse", "Screen")
-                    Click(gx + (gw // 2), gy + gh - 85)
-                    ; 优化：点击响应 + 输入框获焦，150ms 足够（Chrome 通常 <50ms 响应）
-                    Sleep(150)
+                    ; 优先用 UIA 定位输入框：固定坐标偏移在 RDP 会话下会因
+                    ; DPI/分辨率改变而点偏，导致 ^a/^v 落到错误的元素上
+                    if (!FocusGeminiInput(GeminiHwnd))
+                    {
+                        ; UIA 不可用时回退原方案：点击底部中央上移 85px 处
+                        Sleep(300)
+                        WinGetPos(&gx, &gy, &gw, &gh, "ahk_id " . GeminiHwnd)
+                        CoordMode("Mouse", "Screen")
+                        Click(gx + (gw // 2), gy + gh - 85)
+                        Sleep(150)
+                    }
                     try {
                         Suspend(true)  ; 暂时挂起热键，防止 ^a 被 emacs 绑定拦截
                         Send("^a") ; 全选输入框内已有内容
-                        Sleep(30)
+                        Sleep(80)
                         Send("^v") ; 粘贴新内容覆盖
-                        Sleep(30)
+                        ; Gemini 输入框是 contenteditable，粘贴后需要等 React 重渲染、
+                        ; 发送按钮从禁用变可用；等待过短会让 {Enter} 被当成插入换行而非发送。
+                        ; 轮询确认输入框已有内容再回车，最多等约 1.2s（RDP/低配机更慢）
+                        Sleep(150)
+                        WaitGeminiInputReady(GeminiHwnd, 1200)
                         Send("{Enter}") ; 回车发送
                     } finally {
                         Suspend(false)  ; 无论是否抛错都必须恢复，否则所有 emacs 热键会永久失效

@@ -63,64 +63,6 @@ g_MistralApiKey := IniRead(A_ScriptDir . "\ollama_config.ini", "Settings", "Mist
 g_MistralModel := IniRead(A_ScriptDir . "\ollama_config.ini", "Settings", "MistralModel", "mistral-large-latest")
 g_MistralEndpoint := IniRead(A_ScriptDir . "\ollama_config.ini", "Settings", "MistralEndpoint", "https://api.mistral.ai/v1/chat/completions")
 
-OllamaCall(prompt)
-{
-  global g_MistralApiKey, g_MistralModel, g_MistralEndpoint
-  
-  ; 构建 JSON
-  prompt := StrReplace(prompt, "\", "\\")
-  prompt := StrReplace(prompt, "`"", "\`"")
-  prompt := StrReplace(prompt, "`n", "\n")
-  prompt := StrReplace(prompt, "`r", "\r")
-  prompt := StrReplace(prompt, "`t", "\t")
-  
-  ; 系统提示：强制禁用 Markdown 和符号
-  sysPrompt := "纯文本输出，不要用任何符号（如反斜杠、星号、井号）包裹或强调单词。"
-  
-  json := '{"model":"' . g_MistralModel . '","messages":[{"role":"system","content":"' . sysPrompt . '"},{"role":"user","content":"' . prompt . '"}],"temperature":0,"max_tokens":1024,"stream":false}'
-  
-  try {
-    http := ComObject("WinHttp.WinHttpRequest.5.1")
-    http.Open("POST", g_MistralEndpoint, false)
-    http.SetRequestHeader("Content-Type", "application/json; charset=utf-8")
-    http.SetRequestHeader("Authorization", "Bearer " . g_MistralApiKey)
-    http.Send(json)
-    http.WaitForResponse()
-    
-    response := http.ResponseText
-    ; Mistral 返回 OpenAI 格式: {"choices":[{"message":{"content":"..."}}]}
-    if RegExMatch(response, '"content"\s*:\s*"((?:[^"\\]|\\.)*)"', &m)
-      result := m[1]
-    else
-      return "解析失败: " . SubStr(response, 1, 200)
-    
-    result := UnescapeApiJson(result)
-
-    result := Trim(result)
-    return StripEmoji(result)
-  } Catch Error as e {
-    return "请求失败: " . e.Message
-  }
-}
-
-OllamaTranslate(text, isChinese)
-{
-  if isChinese
-    prompt := "Translate to English. Keep the exact same formatting, including punctuation marks, line breaks, and spacing. Output only the translation:`n" . text
-  else
-    prompt := "Translate to Chinese. Keep the exact same formatting, including punctuation marks, line breaks, and spacing. Output only the translation:`n" . text
-  return OllamaCall(prompt)
-}
-
-OllamaCorrect(text, isChinese)
-{
-  if isChinese
-    prompt := "You are a Chinese language tutor. Correct and improve the following Chinese text. Fix grammar, punctuation, and improve expression while keeping the original meaning. Output only the corrected text without any explanation:`n" . text
-  else
-    prompt := "Correct this English text for a Chinese learner.`n`nRules:`n1. First line: ONLY the corrected sentence, nothing else`n2. Second line: exactly three dashes: ---`n3. Then list errors in Chinese: 错误1: 原文 → 修正 (解释)`n`nExample output:`nI am a real team member.`n---`n错误1: i → I (句首字母需要大写)`n错误2: real team → a real team (需要冠词 a)`n`nNow correct: " . text
-  return OllamaCall(prompt)
-}
-
 ShowMainGui(original)
 {
   global g_OriginalText, g_TranslateResult, g_CorrectResult, g_OldClip, g_MainGui
@@ -266,6 +208,10 @@ ShowMainGui(original)
   }
   
   ; 直接显示窗口，不等待 AI 响应
+  ; 必须同步重置隐藏标志：否则"Alt+` 隐藏 → Ctrl+Alt+Enter 重建窗口"后
+  ; g_GuiHidden 残留 true，下次按 Alt+` 本想隐藏，却走"从隐藏恢复"分支（复制文本+重新请求）
+  global g_GuiHidden
+  g_GuiHidden := false
   g_PendingShowGui := false
   if (original = "") {
     g_TranslateEditCtrl.Value := ""
@@ -317,13 +263,8 @@ StartAsyncRequests(text, requestType := "default")
     g_CorrectRequested := true
     g_TranslateRequested := true
     
-    if isChinese {
-      ; 中文：润色 + 翻译成英文
-      combinedPrompt := "请对以下中文进行润色和翻译。不要使用Markdown格式。`n`n输出格式(严格遵守):`n===CORRECT===`n润色后的中文`n===TRANSLATE===`n英文翻译`n`n原文: " . text
-    } else {
-      ; 英文：纠错+解释 + 翻译成中文
-      combinedPrompt := "纠正并翻译以下英文。纯文本输出，不要用任何符号包裹单词。`n`n格式：`n===CORRECT===`n纠正后的英文`n---`n错误: 原文 → 修正 (解释)`n===TRANSLATE===`n中文翻译`n`n英文: " . text
-    }
+    ; 中文：润色+翻译英文；英文：纠错+解释+翻译中文（模板统一维护在 shared/ollama_api.ahk）
+    combinedPrompt := isChinese ? GetCombinedPromptChinese(text) : GetCombinedPromptEnglish(text)
     
     g_HttpCorrect := StartAsyncHttp(combinedPrompt, "correct")
     ; 请求启动失败（COM 创建或 Send 抛错时返回 0）：清除 pending 并提前返回，
@@ -349,14 +290,10 @@ StartAsyncHttp(prompt, requestType)
   
   ; 系统提示：强制禁用 Markdown 和符号
   sysPrompt := "纯文本输出，不要用任何符号（如反斜杠、星号、井号）包裹或强调单词。"
-  
+
   ; 转义 prompt 用于 JSON
-  prompt := StrReplace(prompt, "\", "\\")
-  prompt := StrReplace(prompt, "`"", "\`"")
-  prompt := StrReplace(prompt, "`n", "\n")
-  prompt := StrReplace(prompt, "`r", "\r")
-  prompt := StrReplace(prompt, "`t", "\t")
-  
+  prompt := EscapeJsonForApi(prompt)
+
   ; 构建 JSON (使用流式，OpenAI 格式)
   json := '{"model":"' . g_MistralModel . '","messages":[{"role":"system","content":"' . sysPrompt . '"},{"role":"user","content":"' . prompt . '"}],"temperature":0,"max_tokens":1024,"stream":true}'
   
@@ -386,8 +323,13 @@ CheckAsyncResults()
   ; 检查组合结果（一次调用同时返回纠错和翻译）
   if (g_CorrectPending && IsObject(g_HttpCorrect)) {
     ; 性能优化: readyState=3 时仅显示提示文字，跳过开销高昂的 responseText 读取和 JSON 解析
+    ; 注意：占位符只写控件，不走 UpdateCorrectResult——后者会污染 g_CorrectResult/g_CorrectedText，
+    ; 导致请求未完成时按 Ctrl+Enter 强制替换会把"正在生成输出..."粘贴进用户文档
     if (g_HttpCorrect.readyState == 3) {
-      try UpdateCorrectResult("正在生成输出...")
+      try {
+        if (g_CorrectEditCtrl != "" && g_CorrectEditCtrl.Value != "正在生成输出...")
+          g_CorrectEditCtrl.Value := "正在生成输出..."
+      }
     }
     ; readyState=4: 请求完成，执行一次完整解析
     else if (g_HttpCorrect.readyState == 4) {
@@ -453,8 +395,6 @@ ParseCombinedResult(result)
     UpdateTranslateResult(translatePart)
   }
 }
-
-; IsStreamComplete 和 ReadStreamFile 已移至 ollama_prompt_chat.ahk
 
 UpdateTranslateResult(result)
 {
@@ -584,7 +524,17 @@ Gui_Apply(guiObj, *)
   g_TranslateEditCtrl := ""
   g_CorrectEditCtrl := ""
   g_OrigEditCtrl := ""
-  
+
+  ; 显式激活原前台窗口并等待生效：
+  ; 销毁 GUI 后焦点回落由系统决定、存在竞态，不等待会把替换内容粘贴到错误窗口
+  global g_PrevForegroundHwnd
+  try {
+    if (g_PrevForegroundHwnd && WinExist("ahk_id " . g_PrevForegroundHwnd)) {
+      WinActivate("ahk_id " . g_PrevForegroundHwnd)
+      WinWaitActive("ahk_id " . g_PrevForegroundHwnd, , 1)
+    }
+  }
+
   ; 英文纠错时使用分离后的纠正文本（不含解释）
   if (g_SelectedResult = "translate")
     result := g_TranslateResult
@@ -592,8 +542,9 @@ Gui_Apply(guiObj, *)
     result := g_CorrectedText
   else
     result := g_CorrectResult
-  
-  if (result != "" && !InStr(result, "失败")) {
+
+  ; 过滤错误信息和加载占位符（占位符精确匹配，避免误伤以"正在"开头的真实结果）
+  if (result != "" && !InStr(result, "失败") && result != "正在生成输出..." && result != "正在处理...") {
     A_Clipboard := result
     Sleep(30)
     Send("^a")

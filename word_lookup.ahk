@@ -88,6 +88,7 @@ GetWordAndLineAtMouse(&word, &line)
   word := ""
   line := ""
   found := false
+  fromOcr := false
 
   ; ==========================================================
   ; 【优先级 1】: UIA (UI Automation) - 内存直读，0延迟，100% 准确
@@ -190,19 +191,27 @@ GetWordAndLineAtMouse(&word, &line)
   ; ==========================================================
   if (!found) {
     try {
+      ; 按目标窗口 DPI 缩放截取尺寸，保证高缩放屏幕上覆盖等量的文本行数
       dpi := 96
       try dpi := DllCall("GetDpiForWindow", "Ptr", winUnder, "UInt")
-      if (dpi < 96)
+      ; GetDpiForWindow 在部分窗口/多屏环境下会返回 0，此时若不兜底，
+      ; captureW/captureH 会算成 0，截出 0×0 空图导致 OCR 永远识别不到
+      if (!dpi || dpi < 96)
         dpi := 96
-      scale := 1 ; WinRT OCR 不需要强制放大，原生支持得很好
-      captureW := Round(3840 * scale)
-      captureH := Round(2160 * scale)
+      ; 只截取鼠标周围一小块区域：足够容纳目标词 + 上下各 3 行上下文。
+      ; WinRT OCR 同步执行会阻塞脚本主线程，区域越小识别越快；
+      ; 同时也避免距离兜底吸附到屏幕远处无关的词
+      captureW := Round(800 * dpi / 96)
+      captureH := Round(400 * dpi / 96)
       winX := mouseX - Round(captureW / 2)
       winY := mouseY - Round(captureH / 2)
-      
-      ; 调用 WinRT OCR 库局部截屏取词 (优先尝试英语，若系统没装英文包则自动回退到系统可用语言并提示)
+
+      ; OCR 识别语言可通过 ollama_config.ini 的 [Settings] OcrLanguage 配置（如 zh-CN）。
+      ; 默认 en-US；若系统没装对应语言包则自动回退到系统可用语言
+      ocrLang := "en-US"
+      try ocrLang := IniRead(A_ScriptDir . "\ollama_config.ini", "Settings", "OcrLanguage", "en-US")
       try {
-        ocrResult := OCR.FromRect(winX, winY, captureW, captureH, {Language: "en-US"})
+        ocrResult := OCR.FromRect(winX, winY, captureW, captureH, {Language: ocrLang})
       } catch {
         ocrResult := OCR.FromRect(winX, winY, captureW, captureH)
       }
@@ -239,9 +248,15 @@ GetWordAndLineAtMouse(&word, &line)
             break
         }
         
+        ; 距离兜底设上限：鼠标未直接命中词框时，只允许吸附到约一行高范围内的词，
+        ; 鼠标指着空白处时宁可取不到，也不抓取截取区域内远处无关的词
+        maxSnapDist := 40 * dpi / 96
+        if (bestDist > maxSnapDist)
+          bestWord := ""
+
         ; 收集上下文行 (向上最多取3行，向下最多取3行，增加范围)
         bestLine := ""
-        if (IsSet(bestLineIndex)) {
+        if (bestWord != "" && IsSet(bestLineIndex)) {
           startLineIdx := Max(1, bestLineIndex - 3)
           endLineIdx := Min(ocrResult.Lines.Length, bestLineIndex + 3)
           for i, lObj in ocrResult.Lines {
@@ -253,13 +268,15 @@ GetWordAndLineAtMouse(&word, &line)
         
         ; 尝试合并紧邻的单词结块 (譬如 OpenClaw 被 OCR 分拆为了 Open 和 Claw)
         if (bestWord != "" && IsSet(bestLineObj)) {
+            ; 间距阈值按字高比例计算（约 1/5 字高，至少 3 像素）：
+            ; 固定像素阈值在大字体/高 DPI 下会漏合并，调太大又会把正常空格分隔的词错误拼接
+            mergeGap := Max(3, Round(bestLineObj.Words[bestIndex].h * 0.2))
             ; 往前合并
             tempIndex := bestIndex - 1
             while (tempIndex > 0) {
                 prevWord := bestLineObj.Words[tempIndex]
                 currWord := bestLineObj.Words[tempIndex + 1]
-                ; 判断间距阈值调大 (由 4 像素增加到 15 像素)，支持大字体识别
-                if (currWord.x - (prevWord.x + prevWord.w) <= 4) {
+                if (currWord.x - (prevWord.x + prevWord.w) <= mergeGap) {
                     bestWord := prevWord.Text . bestWord
                     tempIndex--
                 } else {
@@ -271,8 +288,7 @@ GetWordAndLineAtMouse(&word, &line)
             while (tempIndex <= bestLineObj.Words.Length) {
                 nextWord := bestLineObj.Words[tempIndex]
                 currWord := bestLineObj.Words[tempIndex - 1]
-                ; 判断间距阈值调大
-                if (nextWord.x - (currWord.x + currWord.w) <= 4) {
+                if (nextWord.x - (currWord.x + currWord.w) <= mergeGap) {
                     bestWord := bestWord . nextWord.Text
                     tempIndex++
                 } else {
@@ -288,16 +304,21 @@ GetWordAndLineAtMouse(&word, &line)
             word := cleanedWord
             line := bestLine
             found := true
+            fromOcr := true
           }
         }
       }
-    } catch as err {
+    } catch {
+      ; OCR 失败（截屏被拒、引擎初始化失败等）静默放弃，调用方按"未取到词"处理
       return false
     }
   }
 
   if (found && word != "") {
-    word := FixOcrConfusion(word)
+    ; 字符混淆修正只针对 OCR 结果：UIA 是内存直读，文本本身就是准确的，
+    ; 强行修正反而会改错真实含数字的词（如 a1b、b0t）
+    if (fromOcr)
+      word := FixOcrConfusion(word)
     return true
   }
   return false
@@ -320,6 +341,10 @@ GetWordAndLineAtMouse(&word, &line)
 ; }
 
 ; ===== 显示取词浮窗 =====
+; 【注意】当前无任何调用入口（原 F2 入口已改为 Gemini 联动，见 emacs.ahk）。
+; 整套浮窗功能（GUI/查询/历史/Anki）保留以备将来恢复。
+; 若恢复入口，注意本浮窗与翻译主窗口共享 g_QuestionEditCtrl/g_AnswerEditCtrl/
+; g_SendBtnCtrl/g_MainGui 等全局变量，两窗口同时存在时会互相覆盖控件引用。
 ShowWordPopup(word, context, posX, posY)
 {
   global g_WL_Gui, g_WL_ResultCtrl, g_WL_TitleCtrl, g_WL_WordEdit, g_WL_ContextEdit, WL_CurrentWord, WL_CurrentContext, g_WL_LangMode, g_WL_LangBtn, g_WL_AnkiBtn
@@ -714,41 +739,26 @@ StartWordOllamaRequest(word, context, isNavigating := false, isRetry := false)
   g_WL_StreamContent := ""
   g_WL_StreamFileSize := 0
 
+  ; prompt 模板统一维护在 shared/ollama_api.ahk
   if (g_WL_LangMode = "EN") {
-    ; 构建 prompt (英英释义模式)
-    prompt := "You are an English-English dictionary. Explain the word '" . word . "' entirely in simple English."
-    if (context != "" && context != word)
-      prompt .= " Please explain its meaning in the following context:\nContext: " . context
-
-    prompt .= "\n\nPlease output using the following format (plain text only):\n● Part of Speech: xxx /American English IPA/ (phonetics is REQUIRED, always provide American English IPA)\n● Word Roots: [One-line brief breakdown, e.g. pre-(before) + dict(speak) + -ion(noun suffix)]\n● Definition: [Simple English definition]\n● Context Meaning: [Explanation based on the given context]\n● Collocations: [Common collocations or examples]"
-    
+    prompt := GetWordLookupPromptEn(word, context)
     sysPrompt := "Output ONLY in English. Use plain text without Markdown formatting. Keep explanations concise."
   } else {
-    ; 构建 prompt (英汉释义模式)
-    prompt := "你是一个英语词典。解释单词 '" . word . "'"
-    if (context != "" && context != word)
-      prompt .= " 在以下语境中的含义。\n语境：" . context
-    else
-      prompt .= " 的含义。"
-
-    prompt .= "\n\n请用以下格式输出（纯文本）：\n● 词性：xxx /美式音标/（音标为必填项，必须给出美式英语 IPA 音标）\n● 词根拆解：用一行简洁列出，格式如 pre-(前缀,'之前') + dict(词根,'说') + -ion(后缀,名词)\n● 释义：xxx\n● 语境释义：在这个句子中表示...\n● 常见搭配：xxx"
-    
+    prompt := GetWordLookupPromptZh(word, context)
     sysPrompt := "你必须全程使用中文进行解释说明（包括词根的含义也必须翻译为中文，不要夹杂英文解释）。纯文本输出，不要用任何符号（如反斜杠、星号、井号）包裹或强调单词。简洁回答。"
   }
 
   ; 转义 JSON
-  prompt := StrReplace(prompt, "\", "\\")
-  prompt := StrReplace(prompt, "`"", "\`"")
-  prompt := StrReplace(prompt, "`n", "\n")
-  prompt := StrReplace(prompt, "`r", "\r")
-  prompt := StrReplace(prompt, "`t", "\t")
+  prompt := EscapeJsonForApi(prompt)
 
   ; 设置文件
   g_WL_StreamFile := A_Temp . "\ahk_wl_stream_word.txt"
   jsonFile := A_Temp . "\ahk_wl_request_word.json"
+  curlCfg := A_Temp . "\ahk_wl_curl.cfg"
 
   try FileDelete(g_WL_StreamFile)
   try FileDelete(jsonFile)
+  try FileDelete(curlCfg)
 
   ; JSON (OpenAI 格式)
   global g_MistralApiKey, g_MistralModel, g_MistralEndpoint
@@ -756,13 +766,15 @@ StartWordOllamaRequest(word, context, isNavigating := false, isRetry := false)
 
   try {
     FileAppend(json, jsonFile, "UTF-8-RAW")
+    ; Authorization 头写入 curl 配置文件而非命令行，避免 API key 暴露在进程命令行中
+    FileAppend('header = "Authorization: Bearer ' . g_MistralApiKey . '"`n', curlCfg, "UTF-8-RAW")
   } catch {
     return
   }
 
   ; 使用 curl.exe 调用 Mistral API
   try {
-    curlCmd := 'curl.exe -s -N --connect-timeout 10 -m 60 -X POST "' . g_MistralEndpoint . '" -H "Content-Type: application/json" -H "Authorization: Bearer ' . g_MistralApiKey . '" -d "@' . jsonFile . '" -o "' . g_WL_StreamFile . '"'
+    curlCmd := 'curl.exe -s -N --connect-timeout 10 -m 60 -X POST "' . g_MistralEndpoint . '" -H "Content-Type: application/json" -K "' . curlCfg . '" -d "@' . jsonFile . '" -o "' . g_WL_StreamFile . '"'
     Run(curlCmd, , "Hide", &outPid)
     g_WL_StreamPid := outPid
     global g_WL_StartTick
@@ -854,7 +866,8 @@ CheckWordResult()
         SetTimer(CheckWordResult, 0)
         try FileDelete(g_WL_StreamFile)
         try FileDelete(A_Temp . "\ahk_wl_request_word.json")
-        
+        try FileDelete(A_Temp . "\ahk_wl_curl.cfg")
+
         StartWordOllamaRequest(WL_CurrentWord, WL_CurrentContext, false, true)
         return
       }
@@ -876,6 +889,7 @@ CheckWordResult()
     ; 阅后即焚，清理临时文件
     try FileDelete(g_WL_StreamFile)
     try FileDelete(A_Temp . "\ahk_wl_request_word.json")
+    try FileDelete(A_Temp . "\ahk_wl_curl.cfg")
   }
 }
 
