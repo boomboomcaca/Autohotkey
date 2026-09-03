@@ -267,7 +267,11 @@ AddPrompt(listBox, nameEdit, promptEdit)
 {
   global g_PromptList, g_PromptNames, g_PromptDropdown
   
+  ; 连续点"新增"会产生多个同名模板，写入 ini 后成为重复段，自动编号保证唯一
   newName := "新模板"
+  n := 1
+  while HasPromptName(newName)
+    newName := "新模板" . (++n)
   newPrompt := ""
   
   g_PromptNames.Push(newName)

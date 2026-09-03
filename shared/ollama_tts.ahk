@@ -147,7 +147,8 @@ PollTtsPlay()
     SetTimer(PollTtsPlay, 0)
     g_TtsProcPid := 0
     if (FileExist(g_TtsTempFile) && !IsTtsPlaceholder(g_TtsPlayText)) {
-      SoundPlay(g_TtsTempFile) ; 异步非阻塞播放音频
+      ; edge-tts 网络失败时会留下空/残缺文件，SoundPlay 对其抛异常；定时器线程里必须捕获，否则弹错误框
+      try SoundPlay(g_TtsTempFile) ; 异步非阻塞播放音频
     }
   }
 }
@@ -323,7 +324,7 @@ PollHoverTtsPlay()
     SetTimer(PollHoverTtsPlay, 0)
     g_HoverTtsProcPid := 0
     if (g_TtsPlaying && FileExist(tempFile)) {
-      SoundPlay(tempFile)
+      try SoundPlay(tempFile)  ; 同 PollTtsPlay：文件为空/损坏时不能让异常冒泡成错误弹窗
     }
   }
 }

@@ -348,7 +348,10 @@ CheckAsyncResults()
       finalRes := ""
       try status := g_HttpCorrect.status
       try respText := g_HttpCorrect.responseText
-      try finalRes := ParseStreamData(respText, &g_StreamContentCorrect)
+      ; 累积变量必须用本地的空值：ParseStreamData 没解析到内容时会原样返回传入的累积值，
+      ; 复用全局变量会让失败的请求把上一次请求的结果当作本次结果显示出来
+      acc := ""
+      try finalRes := ParseStreamData(respText, &acc)
       if (finalRes != "") {
         try ParseCombinedResult(StripEmoji(finalRes))
       } else {
@@ -607,8 +610,9 @@ Gui_Hide(guiObj, *)
   if (g_MainGui != "") {
     g_MainGui.Hide()
     g_GuiHidden := true
-    ; 窗口隐藏时停止悬停朗读检测定时器，避免后台持续空转
+    ; 窗口隐藏时停止悬停朗读检测定时器与朗读，避免后台持续空转
     SetTimer(CheckTtsHover, 0)
+    try StopTts()
   }
 
   ; 不再恢复剪贴板，避免覆盖用户的截图等内容

@@ -513,10 +513,7 @@ WL_SendToAnki(*)
             }
         } else {
             ; 删除逻辑（仅搜索正面字段，避免释义误匹配）
-            escapeWord := StrReplace(StrReplace(word, "\", "\\"), "`"", "\`"")
-            query := 'deck:"' . deckName . '" ' . frontField . ':re:<h2>' . escapeWord . '</h2>'
-            jsonQuery := StrReplace(query, '"', '\"')
-            payload := '{"action": "findNotes", "version": 6, "params": {"query": "' . jsonQuery . '"}}'
+            payload := WL_BuildAnkiFindPayload(deckName, frontField, word)
             
             http.Open("POST", "http://127.0.0.1:8765", false)
             http.SetRequestHeader("Content-Type", "application/json; charset=utf-8")
@@ -545,6 +542,16 @@ WL_SendToAnki(*)
     } catch Error as e {
         http := ""
     }
+}
+
+; ===== 构造 AnkiConnect findNotes 请求体 =====
+; 单词先做正则转义（re: 搜索里 c++ 这类会成为非法正则），整条查询再做一次 JSON 转义。
+; 原先对单词转义一次引号、再对整条查询转义一次引号，含引号的词会被双重转义而破坏 JSON
+WL_BuildAnkiFindPayload(deckName, frontField, word)
+{
+    reWord := RegExReplace(word, "[\\^$.|?*+()\[\]{}]", "\$0")
+    query := 'deck:"' . deckName . '" ' . frontField . ':re:<h2>' . reWord . '</h2>'
+    return '{"action": "findNotes", "version": 6, "params": {"query": "' . EscapeJsonForApi(query) . '"}}'
 }
 
 WL_CheckAnkiStatus(word) {
@@ -576,10 +583,7 @@ WL_CheckAnkiStatus(word) {
             frontField := "正面"
             frontField := IniReadUtf8(A_ScriptDir . "\ollama_config.ini", "Anki", "FrontField", frontField)
 
-            escapeWord := StrReplace(StrReplace(checkWord, "\", "\\"), "`"", "\`"")
-            query := 'deck:"' . deckName . '" ' . frontField . ':re:<h2>' . escapeWord . '</h2>'
-            jsonQuery := StrReplace(query, '"', '\"')
-            payload := '{"action": "findNotes", "version": 6, "params": {"query": "' . jsonQuery . '"}}'
+            payload := WL_BuildAnkiFindPayload(deckName, frontField, checkWord)
 
             http := ComObject("WinHttp.WinHttpRequest.5.1")
             http.Open("POST", "http://127.0.0.1:8765", false) ; 同步模式，可靠获取结果
