@@ -63,23 +63,28 @@ g_MistralApiKey := IniRead(A_ScriptDir . "\ollama_config.ini", "Settings", "Mist
 g_MistralModel := IniRead(A_ScriptDir . "\ollama_config.ini", "Settings", "MistralModel", "ministral-8b-latest")
 g_MistralEndpoint := IniRead(A_ScriptDir . "\ollama_config.ini", "Settings", "MistralEndpoint", "https://api.mistral.ai/v1/chat/completions")
 
-; ===== 取选中文本；取不到就还原剪贴板 =====
+; ===== 取选中文本，然后无条件还原用户的剪贴板 =====
 ; 调用前需先 g_OldClip := ClipboardAll()、清空 A_Clipboard，再 Send("^c")。
-; 没有选中内容时 ^c 压根不会写剪贴板，ClipWait 超时后剪贴板就停在刚被清空的状态；
-; 而 Gui_Hide/Gui_Close 是有意不还原剪贴板的（注释写着"避免覆盖用户的截图"），
-; 结果反而把用户原有的剪贴板内容——恰恰包括那张截图——永久清没了。
+; 取到的文字放进返回值就够了，脚本后续（ShowMainGui/StartAsyncRequests/Gui_Replace）都不依赖
+; 剪贴板里留着它，所以不管 ^c 复制到了什么，都把用户原来的内容放回去：
+;   - 没选中文字：^c 压根不写剪贴板，剪贴板停在刚被清空的状态，不还原就等于把用户的内容清没了
+;     （Gui_Hide/Gui_Close 是有意不还原的——注释写着"避免覆盖用户的截图"，所以这里必须自己还）
+;   - 没选中文字但编辑器把整行复制了（VS Code/Notepad++/JetBrains 等都这么干）：
+;     不还原的话用户的内容就被那一行顶掉。之前按"复制到了东西=有选中"来判断，正是漏了这种情况
+;   - 复制到的是图片等非文本：同理，还原
+; 这里紧接着取词就还原，不存在 Gui_Hide/Gui_Close 那种"用户中途又复制了别的东西被覆盖"的问题。
 ; 必须先读文本再还原：顺序反了会把旧剪贴板内容错当成"这次选中的文字"。
-; 第二个参数必须为 1（等"任意内容"而不只是文本）：默认只等文本时，
-; 在图片编辑器里按快捷键会因为 ^c 复制到的是图片而超时，
-; 于是把用户刚复制的图片用旧剪贴板顶掉。等任意内容就能区分
-; "^c 确实没复制到东西"和"复制到的是非文本内容"，只有前者才还原。
+; ClipWait 第二个参数传 1（等任意内容）：复制到的是图片时能立刻返回，不用白等满 timeout。
 CaptureSelectionOrRestoreClip(timeout)
 {
   global g_OldClip
+  text := ""
   if (ClipWait(timeout, 1))
-    return Trim(A_Clipboard)  ; 非文本内容时得到空串，但不还原，保住用户刚复制的东西
+    text := Trim(A_Clipboard)
   try A_Clipboard := g_OldClip
-  return ""
+  catch Error as e
+    TrayTip("剪贴板还原失败", e.Message, "Icon!")  ; 别再静默吞掉：还原失败就等于用户内容丢了，得让人知道
+  return text
 }
 
 ShowMainGui(original)
