@@ -58,46 +58,65 @@ LoadPrompts()
   if (!FileExist(g_ConfigFile))
     return
   
-  content := FileRead(g_ConfigFile, "UTF-8")
+  content := ""
+  try content := FileRead(g_ConfigFile, "UTF-8")
+
   currentName := ""
   currentPrompt := ""
-  
+  gotValue := false    ; 已读到本段的 prompt= / prompt_esc= 那一行
+  isEscaped := false   ; 读到的是新版单行转义格式，后续行一律不并入
+
   Loop Parse, content, "`n", "`r"
   {
-    line := Trim(A_LoopField)
-    if (line = "")
-      continue
-    
-    ; 检测 section 名称 [Prompt_xxx]，跳过 [Settings]
-    if (RegExMatch(line, "^\[Prompt_(.+)\]$", &m)) {
-      ; 保存上一个（允许空 prompt）
+    raw := A_LoopField          ; 正文要用原始行：Trim 会吃掉缩进和首尾空格
+    line := Trim(raw)
+
+    ; 任何 section 头都先结束上一段的收集。
+    ; 非 Prompt 段（[Settings]/[Anki] 等）同样要结束，否则该段位于 Prompt 段之后时，
+    ; 它的键值行会被误并入上一个 prompt 正文
+    if (RegExMatch(line, "^\[(.*)\]$", &m)) {
       if (currentName != "") {
+        ; 旧格式靠续行拼出来的正文，首尾可能沾上分隔空行，去掉；
+        ; 新格式是完整的单行值，原样保留（正文末尾的换行是用户自己写的）
         g_PromptNames.Push(currentName)
-        g_PromptList.Push({name: currentName, prompt: currentPrompt})
+        g_PromptList.Push({name: currentName, prompt: isEscaped ? currentPrompt : Trim(currentPrompt, "`r`n")})
       }
-      currentName := m[1]
+      sectionName := m[1]
+      currentName := (SubStr(sectionName, 1, 7) = "Prompt_") ? SubStr(sectionName, 8) : ""
       currentPrompt := ""
-    } else if (RegExMatch(line, "^\[")) {
-      ; 进入非 Prompt 段（[Settings]/[Anki] 等）：结束当前 prompt 收集，
-      ; 否则该段位于 Prompt 段之后时，其键值行会被误并入上一个 prompt 正文
-      if (currentName != "") {
-        g_PromptNames.Push(currentName)
-        g_PromptList.Push({name: currentName, prompt: currentPrompt})
-        currentName := ""
-        currentPrompt := ""
-      }
-    } else if (RegExMatch(line, "^prompt=(.*)$", &m) && currentName != "") {
-      currentPrompt := m[1]
-    } else if (currentName != "" && currentPrompt != "" && !RegExMatch(line, "^\[")) {
-      ; 多行 prompt：非 section 头的后续行追加到当前 prompt
-      currentPrompt .= "`n" . line
+      gotValue := false
+      isEscaped := false
+      continue
     }
+
+    if (currentName = "")
+      continue
+
+    ; 新格式：单行转义值，读到即完成
+    if (!gotValue && RegExMatch(raw, "^\s*prompt_esc=(.*)$", &m)) {
+      currentPrompt := UnescapePromptValue(m[1])
+      gotValue := true
+      isEscaped := true
+      continue
+    }
+
+    ; 旧格式：原样写入，正文可能跨多行
+    if (!gotValue && RegExMatch(raw, "^\s*prompt=(.*)$", &m)) {
+      currentPrompt := m[1]
+      gotValue := true
+      continue
+    }
+
+    ; 旧格式多行正文的续行。空行也要保留——原先在循环开头就 continue 掉了，
+    ; 正文里的段落空行会被静默吃掉；段落末尾多出来的分隔空行在上面 flush 时统一去掉
+    if (gotValue && !isEscaped)
+      currentPrompt .= "`n" . raw
   }
-  
+
   ; 保存最后一个（允许空 prompt）
   if (currentName != "") {
     g_PromptNames.Push(currentName)
-    g_PromptList.Push({name: currentName, prompt: currentPrompt})
+    g_PromptList.Push({name: currentName, prompt: isEscaped ? currentPrompt : Trim(currentPrompt, "`r`n")})
   }
   
   ; 在列表开头插入"无"选项（如果不存在）
@@ -167,7 +186,12 @@ SavePrompts()
     if (item.name = "无")
       continue
     preserved .= "[Prompt_" . item.name . "]`n"
-    preserved .= "prompt=" . item.prompt . "`n`n"
+    ; 含换行/反斜杠/首尾空格或以 [ 开头的正文，原样写进 ini 读回来会串行或被截断，
+    ; 改用单行转义形式；普通正文仍写成可读的 prompt=，手工编辑 ini 的观感不变
+    if (PromptValueNeedsEscaping(item.prompt))
+      preserved .= "prompt_esc=" . EscapePromptValue(item.prompt) . "`n`n"
+    else
+      preserved .= "prompt=" . item.prompt . "`n`n"
   }
 
   ; 先写临时文件再整体替换：原来的"删旧文件 + 追加写"若在写入阶段失败，
@@ -491,7 +515,10 @@ StartChatAsync(question)
     ; 命令行参数可被本机任意进程通过进程列表查看，会暴露 API key
     FileAppend('header = "Authorization: Bearer ' . g_MistralApiKey . '"`n', curlCfg, "UTF-8-RAW")
   } catch {
-    g_AnswerEditCtrl.Value := "请求启动失败: 无法写入临时文件"
+    ; 调用方 Gui_SendQuestion 已把 g_ChatPending 置 true，而轮询定时器还没启动，
+    ; 直接 return 会让状态一直挂着，必须复位
+    g_ChatPending := false
+    try g_AnswerEditCtrl.Value := "请求启动失败: 无法写入临时文件"
     try g_SendBtnCtrl.Enabled := true
     return
   }
@@ -506,7 +533,8 @@ StartChatAsync(question)
     g_ChatLastDataTick := A_TickCount
     g_ChatStreamFileSize := 0
   } catch Error as e {
-    g_AnswerEditCtrl.Value := "请求启动失败: " . e.Message
+    g_ChatPending := false  ; 同上：定时器未启动，状态必须复位
+    try g_AnswerEditCtrl.Value := "请求启动失败: " . e.Message
     try g_SendBtnCtrl.Enabled := true
     return
   }
@@ -583,10 +611,20 @@ CheckChatResult()
       if (g_AnswerEditCtrl != "")
         try g_AnswerEditCtrl.Value := finalResult
     } else {
+      ; 解析不出内容时，先看看是不是接口本身报错：curl 的 -s 不带 -f，HTTP 4xx/5xx
+      ; 退出码同样是 0，错误 JSON 就躺在结果文件里。不做这层判断的话，
+      ; 403（模型不在套餐内）/401/429 会被一律说成"网络连接"问题
+      apiErr := ExtractApiError(ReadTextFileUtf8(g_StreamFileChat))
+      if (apiErr != "")
+        failMsg := "⚠ 接口报错：" . apiErr
+      else if (isTimeout)
+        failMsg := "⚠ 请求超时（30 秒无新数据），请重试。"
+      else
+        failMsg := "⚠ 请求失败，响应为空，请检查网络连接后重试。"
       if (g_AnswerEditCtrl != "")
-        try g_AnswerEditCtrl.Value := "⚠ 请求超时或失败，请检查网络连接后重试。"
+        try g_AnswerEditCtrl.Value := failMsg
     }
-    
+
     g_ChatPending := false
     g_StreamPidChat := 0
     try g_SendBtnCtrl.Enabled := true

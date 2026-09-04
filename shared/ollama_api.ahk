@@ -77,6 +77,97 @@ StripEmoji_FromApiModule(text)
 ; 保持向后兼容的别名
 StripEmoji(text) => StripEmoji_FromApiModule(text)
 
+; ===== 按 UTF-8 整体读取文本文件（读不到时返回空串，不抛异常）=====
+ReadTextFileUtf8(filePath)
+{
+    if (filePath = "" || !FileExist(filePath))
+        return ""
+    content := ""
+    try {
+        f := FileOpen(filePath, "r", "UTF-8")
+        if (!f)
+            return ""
+        content := f.Read()
+        f.Close()
+    }
+    return content
+}
+
+; ===== 从响应正文中提取接口错误信息 =====
+; curl 用 -s 且不带 -f 时，HTTP 4xx/5xx 的退出码仍然是 0，错误 JSON 被原样写进 -o 指定的文件；
+; 而 SSE 解析器只认 "content" 字段，错误体里没有这个键，解析结果就是空串。
+; 各调用方若不先判断接口错误，会把 403（模型不在订阅套餐内）、401（key 失效）、
+; 429（限流）一律显示成"请检查网络连接"，把排查方向完全带偏。
+; 仅应在正常内容解析为空时调用。
+ExtractApiError(rawText)
+{
+    if (rawText = "")
+        return ""
+    ; Mistral/OpenAI 两种错误体格式：
+    ;   {"object":"error","message":"...","type":"tier_not_allowed","code":"1910","raw_status_code":403}
+    ;   {"error":{"message":"...","type":"invalid_request_error","code":null}}
+    if !RegExMatch(rawText, '"message"\s*:\s*"((?:[^"\\]|\\.)*)"', &m)
+        return ""
+    msg := Trim(UnescapeApiJson(m[1]))
+    if (msg = "")
+        return ""
+    ; 附带状态码/错误类型，便于区分是套餐问题、key 问题还是限流
+    detail := ""
+    if RegExMatch(rawText, '"raw_status_code"\s*:\s*(\d+)', &s)
+        detail := "HTTP " . s[1]
+    if RegExMatch(rawText, '"type"\s*:\s*"([^"]+)"', &t)
+        detail := (detail = "") ? t[1] : detail . " " . t[1]
+    return (detail = "") ? msg : msg . " (" . detail . ")"
+}
+
+; ===== Prompt 正文在 ini 中的转义 =====
+; ini 是行式格式，一个键值就是一行。把含换行的正文原样写进 prompt=，
+; 读回来时只能靠"后续行都算续行"来还原，由此带来三处内容丢失：
+;   1) 正文里的空行会被当成分隔空行吃掉；
+;   2) 以 [ 开头的正文行会被误判成 section 头，该行及之后的内容全部丢失；
+;   3) 首尾空格被解析时的 Trim 吃掉。
+; 因此正文一旦"不安全"就转成单行转义形式写进 prompt_esc=。
+; 普通正文（绝大多数情况）仍写成可读的 prompt=，手工编辑 ini 的体验保持不变。
+EscapePromptValue(text)
+{
+    text := StrReplace(text, "\", "\\")
+    text := StrReplace(text, "`r", "\r")
+    text := StrReplace(text, "`n", "\n")
+    text := StrReplace(text, "`t", "\t")
+    return text
+}
+
+; 反转义。同 UnescapeApiJson：必须先把 \\ 抽到占位符，
+; 否则字面反斜杠加 n（"\\n"）会被先解析成换行而损坏内容。
+UnescapePromptValue(text)
+{
+    ph := Chr(0xE000)  ; 私有区占位符，正常文本不会出现
+    text := StrReplace(text, "\\", ph)
+    text := StrReplace(text, "\n", "`n")
+    text := StrReplace(text, "\r", "`r")
+    text := StrReplace(text, "\t", "`t")
+    text := StrReplace(text, ph, "\")
+    return text
+}
+
+; 判断正文原样写进 ini 是否会被破坏
+PromptValueNeedsEscaping(text)
+{
+    if (text = "")
+        return false
+    ; 换行/制表符：ini 一行只能放一个键值
+    ; 反斜杠：不转义的话读回来会被当成转义序列
+    if (InStr(text, "`n") || InStr(text, "`r") || InStr(text, "`t") || InStr(text, "\"))
+        return true
+    ; 以 [ 开头会被误判成 section 头
+    if (SubStr(text, 1, 1) = "[")
+        return true
+    ; 首尾空格会被解析时的 Trim 吃掉
+    if (text != Trim(text))
+        return true
+    return false
+}
+
 ; ===== 读取 UTF-8 ini 中的键值 =====
 ; IniRead 底层是 GetPrivateProfileString：对没有 UTF-16 BOM 的文件按系统 ANSI 代码页解析，
 ; 本项目的 ini 是无 BOM 的 UTF-8，中文值（模板名、Anki 牌组/字段名）会被读成乱码。

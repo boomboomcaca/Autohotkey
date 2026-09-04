@@ -60,8 +60,27 @@ g_PromptManageBtn := ""
 ; InitPrompts() 已移至 shared/ollama_prompt_chat.ahk，不要重复定义
 
 g_MistralApiKey := IniRead(A_ScriptDir . "\ollama_config.ini", "Settings", "MistralApiKey", "")
-g_MistralModel := IniRead(A_ScriptDir . "\ollama_config.ini", "Settings", "MistralModel", "mistral-large-latest")
+g_MistralModel := IniRead(A_ScriptDir . "\ollama_config.ini", "Settings", "MistralModel", "ministral-8b-latest")
 g_MistralEndpoint := IniRead(A_ScriptDir . "\ollama_config.ini", "Settings", "MistralEndpoint", "https://api.mistral.ai/v1/chat/completions")
+
+; ===== 取选中文本；取不到就还原剪贴板 =====
+; 调用前需先 g_OldClip := ClipboardAll()、清空 A_Clipboard，再 Send("^c")。
+; 没有选中内容时 ^c 压根不会写剪贴板，ClipWait 超时后剪贴板就停在刚被清空的状态；
+; 而 Gui_Hide/Gui_Close 是有意不还原剪贴板的（注释写着"避免覆盖用户的截图"），
+; 结果反而把用户原有的剪贴板内容——恰恰包括那张截图——永久清没了。
+; 必须先读文本再还原：顺序反了会把旧剪贴板内容错当成"这次选中的文字"。
+; 第二个参数必须为 1（等"任意内容"而不只是文本）：默认只等文本时，
+; 在图片编辑器里按快捷键会因为 ^c 复制到的是图片而超时，
+; 于是把用户刚复制的图片用旧剪贴板顶掉。等任意内容就能区分
+; "^c 确实没复制到东西"和"复制到的是非文本内容"，只有前者才还原。
+CaptureSelectionOrRestoreClip(timeout)
+{
+  global g_OldClip
+  if (ClipWait(timeout, 1))
+    return Trim(A_Clipboard)  ; 非文本内容时得到空串，但不还原，保住用户刚复制的东西
+  try A_Clipboard := g_OldClip
+  return ""
+}
 
 ShowMainGui(original)
 {
@@ -288,7 +307,7 @@ StartAsyncRequests(text, requestType := "default")
       g_CorrectPending := false
       g_TranslatePending := false
       try UpdateCorrectResult("请求失败，请检查网络或代理后重试")
-      try UpdateTranslateResult("请求失败")
+      try UpdateTranslateResult("请求失败，请检查网络或代理后重试")
       return
     }
     g_CorrectStartTick := A_TickCount
@@ -357,12 +376,18 @@ CheckAsyncResults()
       } else {
         ; 没拿到任何内容（HTTP 401/429 等错误、网络错误、空响应）必须给出提示，
         ; 否则界面永远停在"正在处理..."，用户无从得知已经失败
-        if (status != 0 && status != 200)
-          errMsg := "请求失败 (HTTP " . status . "): " . SubStr(Trim(respText), 1, 200)
-        else
+        if (status != 0 && status != 200) {
+          ; 优先提取接口给出的 message，比原样甩一段 JSON 好读得多；
+          ; 提取不出来（非 JSON 响应、网关错误页）时再退回截断原文
+          apiErr := ExtractApiError(respText)
+          errMsg := (apiErr != "") ? "请求失败：" . apiErr
+                                   : "请求失败 (HTTP " . status . "): " . SubStr(Trim(respText), 1, 200)
+        } else
           errMsg := "请求失败: 网络错误或响应为空，请检查网络/代理后重试"
+        ; 两个框显示同一条信息：以前翻译框写死"请求失败"四个字，
+        ; 用户得去纠错框才能看到真正的原因
         try UpdateCorrectResult(errMsg)
-        try UpdateTranslateResult("请求失败")
+        try UpdateTranslateResult(errMsg)
       }
       g_CorrectPending := false
       g_TranslatePending := false
@@ -376,7 +401,7 @@ CheckAsyncResults()
       g_CorrectPending := false
       g_TranslatePending := false
       try UpdateCorrectResult("请求失败: 超时（90 秒无响应），请重试")
-      try UpdateTranslateResult("请求失败")
+      try UpdateTranslateResult("请求失败: 超时（90 秒无响应），请重试")
     }
     else if (readyState == 3) {
       ; 性能优化: readyState=3 时仅显示提示文字，跳过开销高昂的 responseText 读取和 JSON 解析
@@ -697,9 +722,8 @@ Gui_Close(guiObj, *)
     g_OldClip := ClipboardAll()
     A_Clipboard := ""
     Send("^c")
-    ClipWait(0.3)
-    text := Trim(A_Clipboard)
-    
+    text := CaptureSelectionOrRestoreClip(0.3)
+
     ; 更新原文并重新请求
     if (text != "") {
       ; 检测语言是否改变
@@ -751,8 +775,7 @@ Gui_Close(guiObj, *)
 
   ; 只复制选中的文字，不自动全选
   Send("^c")
-  ClipWait(0.3)
-  text := Trim(A_Clipboard)
+  text := CaptureSelectionOrRestoreClip(0.3)
 
   ; 即使文本为空也显示窗口（可使用 AI 助手）
   ShowMainGui(text)
@@ -770,8 +793,7 @@ Gui_Close(guiObj, *)
   Send("^a")
   Sleep(50)
   Send("^c")
-  ClipWait(0.5)
-  text := Trim(A_Clipboard)
+  text := CaptureSelectionOrRestoreClip(0.5)
 
   ; 即使文本为空也显示窗口
   ShowMainGui(text)

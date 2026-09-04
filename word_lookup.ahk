@@ -695,11 +695,29 @@ WL_ToggleLang()
     StartWordOllamaRequest(WL_CurrentWord, WL_CurrentContext)
 }
 
+; ===== 请求启动失败时的统一复位 =====
+; StartWordOllamaRequest 在启动 curl 之前就把 g_WL_Pending 置成 true，
+; 而轮询定时器 CheckWordResult 要到函数末尾才启动。中途 return 却不复位，
+; 浮窗会永远停在"正在查询..."，除了关窗没有任何恢复途径。
+; 顺带删掉可能已落盘的 curl 配置文件——里面明文写着 API key。
+WL_AbortPendingRequest(msg)
+{
+  global g_WL_Pending, g_WL_StreamPid, g_WL_ResultCtrl
+  g_WL_Pending := false
+  g_WL_StreamPid := 0
+  SetTimer(CheckWordResult, 0)
+  if (g_WL_ResultCtrl != "")
+    try g_WL_ResultCtrl.Value := msg
+  try FileDelete(A_Temp . "\ahk_wl_request_word.json")
+  try FileDelete(A_Temp . "\ahk_wl_curl.cfg")
+}
+
 ; ===== 发起 Ollama 语境解释请求 =====
 StartWordOllamaRequest(word, context, isNavigating := false, isRetry := false)
 {
   global g_WL_StreamFile, g_WL_StreamPid, g_WL_Pending, g_WL_StreamContent, g_WL_LangMode
   global g_WL_History, g_WL_HistoryIdx, g_WL_RetryCount, g_WL_StreamFileSize
+  global g_WL_ResultCtrl  ; 启动失败时要往结果框写提示
 
   if (!isRetry)
     g_WL_RetryCount := 0
@@ -766,6 +784,9 @@ StartWordOllamaRequest(word, context, isNavigating := false, isRetry := false)
     ; Authorization 头写入 curl 配置文件而非命令行，避免 API key 暴露在进程命令行中
     FileAppend('header = "Authorization: Bearer ' . g_MistralApiKey . '"`n', curlCfg, "UTF-8-RAW")
   } catch {
+    ; 上面已把 g_WL_Pending 置 true，而轮询定时器要到函数末尾才启动。
+    ; 直接 return 会让浮窗永远停在"正在查询..."，除了关窗没有任何恢复途径
+    WL_AbortPendingRequest(g_WL_LangMode = "EN" ? "⚠ Failed to write temp file (disk full or locked)." : "⚠ 无法写入临时文件，请检查磁盘空间或杀毒软件拦截。")
     return
   }
 
@@ -778,6 +799,8 @@ StartWordOllamaRequest(word, context, isNavigating := false, isRetry := false)
     g_WL_StartTick := A_TickCount
     g_WL_LastDataTick := A_TickCount
   } catch {
+    ; 同上：curl.exe 不存在或被拦截时，不复位就会永远卡在"正在查询..."
+    WL_AbortPendingRequest(g_WL_LangMode = "EN" ? "⚠ Failed to launch curl.exe." : "⚠ 无法启动 curl.exe，请确认系统已安装 curl。")
     return
   }
 
@@ -854,8 +877,14 @@ CheckWordResult()
       }
     } else {
       global g_WL_RetryCount, WL_CurrentWord, WL_CurrentContext
-      ; AI 无响应或请求超时，如果在 10 秒超时并且是初次超时，执行自动重试一次
-      if (isTimeout && g_WL_RetryCount < 1) {
+      ; 解析不出内容时，先看看是不是接口本身报错：curl 的 -s 不带 -f，HTTP 4xx/5xx
+      ; 退出码同样是 0，错误 JSON 就躺在结果文件里。不做这层判断的话，
+      ; 403（模型不在套餐内）/401/429 会被一律说成"请检查网络连接"
+      apiErr := ExtractApiError(ReadTextFileUtf8(g_WL_StreamFile))
+
+      ; AI 无响应或请求超时，如果在 10 秒超时并且是初次超时，执行自动重试一次。
+      ; 接口已明确报错时不重试：403/401 这类错误重试多少次结果都一样，只会白等 10 秒
+      if (apiErr = "" && isTimeout && g_WL_RetryCount < 1) {
         g_WL_RetryCount++
         if (g_WL_ResultCtrl != "") {
           msg := (g_WL_LangMode = "EN" ? "⏱ Timeout... Retrying (" . g_WL_RetryCount . "/1)..." : "⏱ 查询缓慢... 正在自动重试 (" . g_WL_RetryCount . "/1)...")
@@ -875,9 +904,12 @@ CheckWordResult()
 
       ; 如果不是超时或者重试依然失败，则显示彻底失败提示
       if (g_WL_ResultCtrl != "") {
-        msg := isTimeout ? "⚠ Request timed out (>10s)." : "⚠ Connection failed or timed out."
-        if (g_WL_LangMode != "EN")
-          msg := isTimeout ? "⚠ 请求连续超时，请检查网络。" : "⚠ 请求失败或超时，请检查网络连接。"
+        if (apiErr != "")
+          msg := (g_WL_LangMode = "EN" ? "⚠ API error: " : "⚠ 接口报错：") . apiErr
+        else if (g_WL_LangMode = "EN")
+          msg := isTimeout ? "⚠ Request timed out (>10s)." : "⚠ Connection failed or empty response."
+        else
+          msg := isTimeout ? "⚠ 请求连续超时，请检查网络。" : "⚠ 请求失败或响应为空，请检查网络连接。"
         try g_WL_ResultCtrl.Value := msg
       }
     }
