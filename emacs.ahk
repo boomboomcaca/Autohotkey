@@ -225,24 +225,6 @@ backward_word()
     Send("^{Left}")
   Return
 }
-scroll_up()
-{
-  global
-  if is_pre_spc
-    Send("+{PgUp}")
-  Else
-    Send("{PgUp}")
-  Return
-}
-scroll_down()
-{
-  global
-  if is_pre_spc
-    Send("+{PgDn}")
-  Else
-    Send("{PgDn}")
-  Return
-}
 
 
 ^q::
@@ -489,24 +471,6 @@ global ; V1toV2: Made function global
     backward_char()
 Return
 } ; V1toV2: Added closing brace for [^b]
-!n::
-{ ; V1toV2: Added opening brace for [!n]
-global ; V1toV2: Made function global
-  If is_target()
-    Send(A_ThisHotkey)
-  Else
-    scroll_down()
-Return
-} ; V1toV2: Added closing brace for [!n]
-!p::
-{ ; V1toV2: Added opening brace for [!p]
-global ; V1toV2: Made function global
-  If is_target()
-    Send(A_ThisHotkey)
-  Else
-    scroll_up()
-Return
-} ; V1toV2: Added closing brace for [!p]
 !<::
 { ; V1toV2: Added opening brace for [!<]
 global ; V1toV2: Made function global

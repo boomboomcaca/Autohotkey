@@ -8,7 +8,8 @@
 ;;
 ;;   Alt + Enter          左键单击
 ;;   Alt + /              右键单击
-;;   Alt + PgUp / PgDn    滚轮上 / 下
+;;   Alt + p / n          滚轮上 / 下（滚的是鼠标指针下面那块区域，
+;;                        不必先让焦点落进去；按住连发）
 ;;
 ;; 无模式切换，按住 Alt 即用。
 ;;
@@ -235,7 +236,7 @@ MK_ReleaseAll() {
 OnExit((*) => MK_ReleaseAll())
 
 ; 滚轮连发。两处教训都来自"松开后还在不停滚"：
-;  1) 先松 Alt 再松 PgUp/PgDn 时，带 Alt 的松开热键不会触发，光靠它停不下定时器，
+;  1) 先松 Alt 再松滚轮键时，带 Alt 的松开热键不会触发，光靠它停不下定时器，
 ;     所以像 MK_Step 一样每一拍自查 Alt 还在不在，并加最长按住时间兜底；
 ;  2) 键盘自动重复会每 30ms 左右反复触发按下热键，若每次都重设 70ms 的定时器，
 ;     倒计时会被一直推迟、按住期间几乎不响，攒到松开才连发——同方向重复按下直接忽略。
@@ -294,9 +295,11 @@ MK_WheelTick() {
 *Enter::MK_Click("Left")
 *SC035::MK_Click("Right")   ; SC035 = 斜杠键，写扫描码避免 */ 被解析歧义
 
-*PgUp::MK_WheelStart(1)
-*PgUp Up::MK_WheelStop()
-*PgDn::MK_WheelStart(-1)
-*PgDn Up::MK_WheelStop()
+; p=上滚 n=下滚，沿用 emacs 里 p/n 表示上/下的习惯（原先这两个键是整页跳）。
+; 用字母而不是 PgUp/PgDn，一是手不用离开 ijkl 区域，二是把 Alt+PgUp/PgDn 还给应用。
+*p::MK_WheelStart(1)
+*p Up::MK_WheelStop()
+*n::MK_WheelStart(-1)
+*n Up::MK_WheelStop()
 
 #HotIf
