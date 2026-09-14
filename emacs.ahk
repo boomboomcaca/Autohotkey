@@ -1073,3 +1073,7 @@ RButton::
 
 ; 引入鼠标取词模块
 #Include "word_lookup.ahk"
+
+; 引入键盘控制鼠标模块（按住 Alt + 方向键移动，无模式切换）
+; 与 mousemaster 抢同样的按键，两者只能启用其一
+#Include "mousekeys.ahk"
