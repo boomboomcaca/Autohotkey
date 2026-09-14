@@ -26,16 +26,18 @@ global MK_ModAlt       := "Alt"   ; "Alt"=左右 Alt 都可；"LAlt" 仅左；"R
 
 ; 速度模型：加速度 = 阻力系数 ×（终端速度 − 当前速度），速度平滑收敛到终端速度。
 ; 两段式：同一条加速曲线没法既让短按精确、又让长按迅猛，所以分两档。
-; 前 MK_BoostDelay 毫秒走低速档，专为短距离微调把起步压得很轻：
-; 点一下 40ms ≈ 6px、80ms ≈ 17px；之后切到高速档奔袭，3840 宽的屏跨全屏约 0.9 秒。
+; 前 MK_BoostDelay 毫秒走低速档，专为短距离微调：
+; 点一下 40ms ≈ 9px、80ms ≈ 24px；之后切到高速档奔袭，3840 宽的屏跨全屏约 0.9 秒。
+; 注：低速档只影响头 200ms，中长距离几乎不受它影响
+; （起步 80 与 300 相比，0.5s 处只差 11%、跨全屏只差 2%）。
 ; 嫌短按走得远/近 → 只动 MK_InitialSpeed / MK_Resistance；
 ; 嫌起飞晚 → 调小 MK_BoostDelay；嫌飞起来不够猛 → 调大 MK_TermBoost。
-global MK_Resistance   := 1.6     ; 低速档阻力系数（1/秒）。调大=更快到顶更跟手；调小=更绵长
+global MK_Resistance   := 2.0     ; 低速档阻力系数（1/秒）。调大=更快到顶更跟手；调小=更绵长
 global MK_TermNormal   := 2200    ; 低速档终端速度（像素/秒）
 global MK_BoostDelay   := 200     ; 连续移动超过这么久（毫秒）切入高速档
 global MK_ResistBoost  := 4.0     ; 高速档阻力系数
 global MK_TermBoost    := 8000    ; 高速档终端速度（像素/秒）
-global MK_InitialSpeed := 80      ; 起步速度，决定「点一下走多远」
+global MK_InitialSpeed := 150     ; 起步速度，决定「点一下走多远」
 global MK_Tick         := 8       ; 定时器周期（毫秒）
 global MK_WheelRepeat  := 70      ; 滚轮连发间隔（毫秒）
 global MK_MaxHoldMs    := 6000    ; 单个方向键最长持续时间，超时即判定松开事件丢失
