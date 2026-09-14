@@ -571,8 +571,11 @@ global ; V1toV2: Made function global
 return
 } ; V1toV2: Added closing brace for [!>]
 
-XButton1::Send("!{Left}")  ; 将鼠标的前进按钮映射为Alt + Left
-XButton2::Send("!{Right}") ; 将鼠标的后退按钮映射为Alt + Right
+XButton1::Send("!{Left}")  ; 后退键（靠后那个）-> Alt+Left，即浏览器后退
+; 前进键（靠前那个）-> 直接调用 Gemini 窗口开关，与 F2 同一份代码
+; 不用 Send("{F2}")：AHK 默认忽略脚本自己发出的按键，那样触发不了本脚本的 F2 热键
+; 2026-09-14 改（原为 Alt+Right 浏览器前进）
+XButton2::GeminiToggle()
 #Space::Send("{Ctrl down}{Space}{Ctrl up}")
 
 
@@ -657,6 +660,140 @@ GetGeminiWindow()
             return hwnd
         }
     }
+    return 0
+}
+
+; 找 Chrome 的主浏览器窗口（用于在上面定位工具栏按钮）。
+; 不能图省事用 WinGetID("ahk_exe chrome.exe")：它返回的是最靠前的匹配窗口，
+; 实测会拿到 708x53 的气泡/拖拽预览窗口，UIA 在那上面一个按钮也找不到。
+GetMainChromeWindow()
+{
+    for hwnd in WinGetList("ahk_class Chrome_WidgetWin_1 ahk_exe chrome.exe")
+    {
+        try {
+            style := WinGetStyle(hwnd)
+            if !(style & 0x10000000)          ; 必须可见
+                continue
+            if ((style & 0xC00000) != 0xC00000) ; 必须带标准标题栏
+                continue
+            WinGetPos(, , &w, &h, hwnd)
+            ; 带标题的大窗口才是浏览器主窗口；
+            ; 空标题的是已经弹出的 Gemini 窗口，必须排除，否则会在它上面找按钮
+            if (w > 600 && h > 400 && WinGetTitle(hwnd) != "")
+                return hwnd
+        }
+    }
+    return 0
+}
+
+; 找"已经弹出、但当前被隐藏"的 Gemini 窗口。
+; GetGeminiWindow 只枚举可见窗口，隐藏中的窗口全靠 GeminiAutoHwnd 缓存找回；
+; 一旦按 F2 隐藏后脚本重启（缓存清零），那个窗口就谁也找不到了：
+; 此时 "Ask Gemini"（面板已开）和 "Pop-out chat"（已经是弹出状态）两个按钮都不存在，
+; 走点按钮的流程只会白等十秒且毫无反应。所以自动打开前先认领它。
+FindHiddenGeminiWindow()
+{
+    global GeminiAutoHwnd
+    result := 0
+    DetectHiddenWindows(true)
+    for hwnd in WinGetList("ahk_class Chrome_WidgetWin_1 ahk_exe chrome.exe")
+    {
+        try {
+            style := WinGetStyle(hwnd)
+            if (style & 0x10000000)             ; 只捡隐藏的，可见的归 GetGeminiWindow 管
+                continue
+            if ((style & 0xC00000) != 0xC00000) ; 同样要求标准标题栏，滤掉 Chrome 的辅助窗口
+                continue
+            WinGetPos(, , &w, &h, hwnd)
+            if (w < 200 || h < 200)
+                continue
+            if (WinGetTitle(hwnd) == "")
+            {
+                result := hwnd
+                break
+            }
+        }
+    }
+    DetectHiddenWindows(false)
+    if (result)
+        GeminiAutoHwnd := result
+    return result
+}
+
+; 自动打开 Gemini 独立窗口，成功返回窗口句柄，失败返回 0。
+; 两步：点标签栏的 "Ask Gemini" 打开面板 → 点面板里的 "Pop-out chat" 弹成独立窗口。
+;
+; 为什么不用快捷键：Alt+G 在 Chrome 上并没有绑定（实测激活 Chrome 后发 !g，
+; 6 秒内无任何窗口变化），原先那行 Send("!g") 是空操作，这正是一直要手动开窗口的原因。
+; 这两个按钮都是标准 UIA Button（支持 Invoke），是目前唯一稳定的入口。
+OpenGeminiWindow()
+{
+    ; 窗口其实已经存在、只是被隐藏了，直接复用，不要再去点按钮
+    hidden := FindHiddenGeminiWindow()
+    if (hidden)
+        return hidden
+
+    chromeHwnd := GetMainChromeWindow()
+    if (!chromeHwnd)
+    {
+        ; Chrome 没启动：拉起来再等主窗口出现
+        try {
+            Run("chrome.exe")
+        } catch {
+            MsgBox("未找到 Chrome，无法自动打开 Gemini。", "提示", "T3")
+            return 0
+        }
+        deadline := A_TickCount + 20000
+        while (A_TickCount < deadline)
+        {
+            Sleep(300)
+            chromeHwnd := GetMainChromeWindow()
+            if (chromeHwnd)
+                break
+        }
+        if (!chromeHwnd)
+            return 0
+        Sleep(1000)  ; 冷启动后等标签栏渲染完，否则 UIA 还枚举不到工具栏按钮
+    }
+
+    try WinActivate("ahk_id " . chromeHwnd)
+    if !WinWaitActive("ahk_id " . chromeHwnd, , 3)
+        return 0
+    Sleep(200)
+
+    ; 1) 打开 Gemini 面板。该按钮是开关：面板关着时叫 "Ask Gemini"，
+    ;    开着时变成 "Close Gemini in Chrome"。只在找得到 "Ask Gemini" 时点，
+    ;    否则会把已经开着的面板关掉。找不到 = 面板已开，直接进入第 2 步。
+    try {
+        UIA.ElementFromHandle(chromeHwnd).FindElement({Name: "Ask Gemini", Type: "Button"}).Invoke()
+    }
+
+    ; 2) 弹成独立窗口。面板要渲染一会儿才会出现 "Pop-out chat"（实测约 1 秒，
+    ;    Chrome 冷启动时更久），所以轮询；每轮重新取一次 UIA 根元素，
+    ;    避免拿到面板出现之前的旧树。
+    deadline := A_TickCount + 8000
+    while (A_TickCount < deadline)
+    {
+        try {
+            UIA.ElementFromHandle(chromeHwnd).FindElement({Name: "Pop-out chat", Type: "Button"}).Invoke()
+            break
+        }
+        Sleep(200)
+    }
+
+    ; 3) 等独立窗口出现（实测点完约 100~500ms 就能被 GetGeminiWindow 找到）
+    deadline := A_TickCount + 5000
+    while (A_TickCount < deadline)
+    {
+        hwnd := GetGeminiWindow()
+        if (hwnd)
+            return hwnd
+        Sleep(200)
+    }
+
+    ; 走到这里说明 Chrome 的 Gemini 入口和预期不一样（改版、换了界面语言等）。
+    ; 不提示的话 F2 就是按下去毫无反应，没法判断是脚本坏了还是没按到。
+    MsgBox("未能自动打开 Gemini 窗口，请手动打开一次。", "提示", "T3")
     return 0
 }
 
@@ -761,10 +898,16 @@ WaitGeminiInputReady(hwnd, timeoutMs := 1200)
 
 ; F2 自动寻找并切换 Gemini 窗口的显示/隐藏（最小化/激活）
 ; 当从外部切换到 Gemini 时，会自动抓取当前鼠标下的单词和句子并粘贴到输入框中
-F2::
+F2::GeminiToggle()
+
+GeminiToggle()
 {
     global GeminiAutoHwnd
     GeminiHwnd := GetGeminiWindow()
+    justOpened := false
+    word := ""
+    line := ""
+    hasWord := false
     if (!GeminiHwnd)
     {
         ; 如果没找到空标题的，也可以尝试找找名字里带 Gemini 的
@@ -772,25 +915,14 @@ F2::
             GeminiHwnd := WinGetID("Gemini ahk_exe chrome.exe")
         else
         {
-            ; 未检测到 Gemini 窗口，自动通过 Alt+G 打开并 Pop-out chat
-            if WinExist("ahk_exe chrome.exe")
-            {
-                try {
-                    WinActivate("ahk_exe chrome.exe")
-                    if !WinWaitActive("ahk_exe chrome.exe", , 2)
-                        return
-                    Sleep(300)
-                    Send("!g")  ; Alt+G 打开 Gemini 侧边栏
-                }
-                catch TargetError {
-                    ; 忽略 Chrome 不存在的错误
-                }
-            }
-            else
-            {
-                MsgBox("未检测到 Chrome 浏览器，请先打开 Chrome！", "提示", "T3")
-            }
-            return
+            ; 未检测到 Gemini 窗口：先抓词，再自动打开（Chrome 没启动时会一并拉起）。
+            ; 抓词必须在 OpenGeminiWindow 之前——它会激活 Chrome，
+            ; 之后鼠标底下就是 Chrome 的内容，取到的词不再是原界面上的那个。
+            hasWord := GetWordAndLineAtMouse(&word, &line)
+            GeminiHwnd := OpenGeminiWindow()
+            if (!GeminiHwnd)
+                return
+            justOpened := true
         }
     }
 
@@ -805,7 +937,9 @@ F2::
         return
     }
 
-    if (isVisible)
+    ; justOpened 时窗口刚被弹出来，本来就是可见的；
+    ; 不排除掉就会立刻走进隐藏分支，表现为"按 F2 闪一下又没了"
+    if (isVisible && !justOpened)
     {
         ; 只要窗口在屏幕上（不管是不是活动窗口），按 F2 一律直接隐藏（从任务栏也消失）
         try {
@@ -819,10 +953,10 @@ F2::
     {
         ; 如果窗口当前被隐藏了，则：
         ; 1. 先抓取当前鼠标下的词句（必须在激活窗口前抓取，否则会失去原界面的焦点）
-        word := ""
-        line := ""
-        hasWord := GetWordAndLineAtMouse(&word, &line)
-        
+        ;    justOpened 的情况已经在打开窗口之前抓过了，这里不能再抓一次
+        if (!justOpened)
+            hasWord := GetWordAndLineAtMouse(&word, &line)
+
         ; 2. 恢复并激活 Gemini 窗口
         try {
             DetectHiddenWindows(true)
