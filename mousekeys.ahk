@@ -57,6 +57,7 @@ global MK_Dragging   := false     ; Shift+Alt+方向 触发的拖动是否进行
 global MK_BurstSince := 0         ; 本次连续移动的起始时刻，0 = 当前没在移动
 global MK_WheelDir   := 0         ; 滚轮连发方向：+1 上 / -1 下 / 0 没在滚
 global MK_WheelSince := 0         ; 本次滚轮连发的起始时刻，用于超时兜底
+global MK_Masked     := false     ; 本次 Alt 按住期间是否已经发过菜单屏蔽键
 
 ; 判定"用户是不是按着 Alt"。必须用物理状态 "P"，也是本模块所有热键改用 #HotIf
 ; 自行判定、而不是写成 !Up / !Enter 的原因：
@@ -77,7 +78,16 @@ MK_AltHeld() {
 }
 
 MK_Press(k) {
-    global MK_Dir, MK_DirSince, MK_Tick
+    global MK_Dir, MK_DirSince, MK_Tick, MK_Masked
+    ; 本次 Alt 按住期间发一次菜单屏蔽键。
+    ; i/j/k/l 被热键吃掉、MouseMove 又不算「按键」，应用在整段 Alt 期间一个输入都
+    ; 没收到，用户松开 Alt 时 Windows 就判成激活菜单栏（应用的菜单条会亮起来）。
+    ; Alt+p/n 没这毛病，是因为滚轮事件本身就把这个判定解掉了。
+    ; 只发一次：键盘自动重复会每 30ms 左右反复触发本函数，每次都发就成了狂敲 Ctrl。
+    if (!MK_Masked) {
+        Send("{Blind}{" . A_MenuMaskKey . "}")
+        MK_Masked := true
+    }
     ; 拖动的判定不在这里，而在 MK_Step 每一拍做——见那边的注释
     MK_Dir[k] := true
     MK_DirSince[k] := A_TickCount
@@ -90,11 +100,12 @@ MK_Release(k) {
 }
 
 MK_Stop() {
-    global MK_Vel, MK_AccX, MK_AccY, MK_Dir, MK_Dragging, MK_BurstSince
+    global MK_Vel, MK_AccX, MK_AccY, MK_Dir, MK_Dragging, MK_BurstSince, MK_Masked
     SetTimer(MK_Step, 0)
     for k in ["U", "D", "L", "R"]
         MK_Dir[k] := false
     MK_BurstSince := 0
+    MK_Masked := false   ; Alt 已经松开，下次按住要重新屏蔽一次
     ; 松开 Alt 视为本次拖动结束，在此放开左键
     if (MK_Dragging) {
         Click("Left Up")
@@ -218,8 +229,10 @@ MK_Step() {
 ; 用户之后物理松开 Alt 时 Windows 会判成激活菜单栏。
 ; NoTimers：这几毫秒里不让 MK_Step / MK_WheelTick 插队。
 MK_Click(btn) {
+    global MK_Masked
     Thread("NoTimers", true)
     Send("{Blind}{" . A_MenuMaskKey . "}{LAlt up}{RAlt up}")
+    MK_Masked := true    ; 这一下也算屏蔽过了，接着按方向键不用再发
     Click(btn)
     Thread("NoTimers", false)
 }
