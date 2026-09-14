@@ -70,12 +70,8 @@ MK_AltDown() {
 }
 
 MK_Press(k) {
-    global MK_Dir, MK_DirSince, MK_Tick, MK_Dragging
-    ; 按下瞬间若同时按着 Shift，进入拖动：先压住左键再开始移动
-    if (GetKeyState("Shift") && !MK_Dragging) {
-        Click("Left Down")
-        MK_Dragging := true
-    }
+    global MK_Dir, MK_DirSince, MK_Tick
+    ; 拖动的判定不在这里，而在 MK_Step 每一拍做——见那边的注释
     MK_Dir[k] := true
     MK_DirSince[k] := A_TickCount
     SetTimer(MK_Step, MK_Tick)
@@ -113,10 +109,23 @@ MK_Step() {
     global MK_Vel, MK_AccX, MK_AccY, MK_Tick, MK_Dir, MK_DirSince
     global MK_Resistance, MK_InitialSpeed, MK_MaxHoldMs
     global MK_TermNormal, MK_TermBoost, MK_ResistBoost, MK_BurstSince
+    global MK_Dragging   ; 少了这行，下面的赋值会写进局部变量，
+                         ; 全局 MK_Dragging 恒为 false → 每 8ms 压一次左键且永不放开
 
     if (!MK_AltDown()) {
         MK_Stop()
         return
+    }
+
+    ; 拖动判定放在每一拍，而不是方向键按下那一瞬间：
+    ; 否则"先按住 Alt+方向键开始移动、中途再补按 Shift"就进不了拖动，
+    ; 而这正是常见的用法——先把光标挪到起点附近，再按 Shift 开拖。
+    ; 补按 Shift 的那一拍压下左键，本拍的移动发生在其后，所以不会漏掉起点。
+    ; 松开 Shift 不结束拖动：以松开 Alt 为准（见 MK_Stop），
+    ; 免得拖到一半手指松一下 Shift 就把东西掉在半路。
+    if (GetKeyState("Shift") && !MK_Dragging) {
+        Click("Left Down")
+        MK_Dragging := true
     }
 
     ; 保险：松开事件偶尔会丢失，导致光标一直跑。超过上限就强制视为已松开。
