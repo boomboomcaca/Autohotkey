@@ -84,6 +84,13 @@ delete_backward_char()
   global is_pre_spc := ""
   Return
 }
+delete_backward_word()
+{
+  Send("^+{Left}")
+  Send("{BS}")
+  global is_pre_spc := ""
+  Return
+}
 kill_line()
 {
   Send("{ShiftDown}{END}{ShiftUp}")
@@ -332,6 +339,17 @@ global ; V1toV2: Made function global
     delete_word()
 Return
 } ; V1toV2: Added closing brace for [!d]
+; Alt+H 删除左边一个单词，与 Alt+D（删右边）对称。
+; mousekeys 曾短暂占用过 H（vim 的 hjkl 布局），改成倒 T 形 ijkl 后这个键空了出来。
+!h::
+{ ; V1toV2: Added opening brace for [!h]
+global ; V1toV2: Made function global
+  if is_target()
+    Send(A_ThisHotkey)
+  else
+    delete_backward_word()
+return
+} ; V1toV2: Added closing brace for [!h]
 ^f::
 { ; V1toV2: Added opening brace for [^f]
 global ; V1toV2: Made function global

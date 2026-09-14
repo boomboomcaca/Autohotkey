@@ -1,9 +1,9 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; 键盘控制鼠标：按住 Alt + 方向键
 ;;
-;;   Alt + h j k l        移动光标（Vim 布局：h=左 j=下 k=上 l=右）
+;;   Alt + i j k l        移动光标（倒 T 形：i=上 j=左 k=下 l=右）
 ;;                        按住逐渐加速；前 0.2 秒温和便于微调，之后切入高速档奔袭
-;;   Alt + Shift + hjkl   拖动：自动压住左键并移动；Alt 或 Shift 任一松开即放下。
+;;   Alt + Shift + ijkl   拖动：自动压住左键并移动；Alt 或 Shift 任一松开即放下。
 ;;                        中途补按 Shift 也能起拖（不必一开始就按着）
 ;;
 ;;   Alt + Enter          左键单击
@@ -13,9 +13,9 @@
 ;; 无模式切换，按住 Alt 即用。
 ;;
 ;; 已知冲突（都是全局接管按键的必然结果，不是 bug）：
-;;   1) 按住 Alt 时 h j k l 被本模块吃掉，打不出这四个字母。
-;;      原先占用这几个键的 emacs 绑定已移除：Alt+H（删左词）、Alt+K / Alt+Shift+K（切标签页）。
-;;      切标签仍可用原生的 Ctrl+Tab / Ctrl+Shift+Tab。
+;;   1) 按住 Alt 时 i j k l 被本模块吃掉，打不出这四个字母。
+;;      原先占用 K 的 emacs 绑定已移除：Alt+K / Alt+Shift+K（切标签页），
+;;      切标签仍可用原生的 Ctrl+Tab / Ctrl+Shift+Tab。i / j / l 本来就是空的。
 ;;   2) Alt+Enter 被本模块吃掉，Chrome 地址栏"新标签打开"、Excel 单元格内换行、
 ;;      资源管理器"属性"等原生功能在全局失效。
 ;;   注：改用 hjkl 后方向键已还给系统，Alt+←/→ 恢复为浏览器的后退/前进。
@@ -275,14 +275,17 @@ MK_WheelTick() {
 ; 条件为假时这些热键根本不存在，所以不按 Alt 时方向键 / Enter / 斜杠一切如常。
 #HotIf MK_AltHeld()
 
-; Vim 布局：h=左 j=下 k=上 l=右。
+; 倒 T 形布局：i=上 j=左 k=下 l=右。键位形状就是方向键的形状，不用记约定。
+; 不用 vim 的 hjkl，是因为按标准指法 h 和 j 都归右手食指，
+; 左下（j+h）要一根食指同时压两个相邻键，按不出来；
+; 倒 T 形下四个斜向分别是 中指+食指 / 中指+无名，都是两根不同的手指。
 ; 用字母而不是方向键，是为了把 Alt+←/→ 还给浏览器的前进后退。
-*h::MK_Press("L")
-*h Up::MK_Release("L")
-*j::MK_Press("D")
-*j Up::MK_Release("D")
-*k::MK_Press("U")
-*k Up::MK_Release("U")
+*i::MK_Press("U")
+*i Up::MK_Release("U")
+*j::MK_Press("L")
+*j Up::MK_Release("L")
+*k::MK_Press("D")
+*k Up::MK_Release("D")
 *l::MK_Press("R")
 *l Up::MK_Release("R")
 
