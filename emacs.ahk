@@ -672,12 +672,72 @@ FindHiddenGeminiWindow()
     return result
 }
 
+; 点标签栏右侧那个 Gemini 开关按钮。wantClose=false 找"打开"那一面，true 找"关闭"那一面。
+; 点到了返回 true。
+;
+; 不按精确名字匹配是有教训的：Chrome 会改这个按钮的无障碍名称，而且会改回去。
+; 2026-09-14 一天之内实测到三种："Ask Gemini" → "Open Gemini in Chrome" → 又变回
+; "Ask Gemini"；位置尺寸一点没变（标签栏右侧 280x90）。写死名字的话，Chrome 一更新
+; 脚本就瞎，表现为按 F2 弹"未能自动打开 Gemini 窗口，请手动打开一次"。
+;
+; 改用特征匹配：名字含 Gemini、位于窗口顶部 150px 内。后一条用来排除面板/网页里同样
+; 含 Gemini 的按钮（实测有 "Skip to the latest Gemini result" 在 y≈212、
+; 收藏栏上还有个 "Unnamed bookmark for https://gemini.google.com/app" 在 y≈208）。
+; 开与关是同一个按钮，靠名字里有没有 Close 区分。
+InvokeGeminiToolbarButton(chromeHwnd, wantClose := false)
+{
+    want := wantClose ? 1 : 0
+    try {
+        WinGetPos(, &wy, , , "ahk_id " . chromeHwnd)
+        for el in UIA.ElementFromHandle(chromeHwnd).FindAll({Type: "Button"})
+        {
+            try {
+                nm := el.Name
+                if (nm = "" || !InStr(nm, "Gemini"))
+                    continue
+                if ((InStr(nm, "Close") ? 1 : 0) != want)
+                    continue
+                if (el.GetPos("screen").y - wy > 150)   ; 只认顶部工具栏那一条
+                    continue
+                el.Invoke()
+                return true
+            }
+        }
+    }
+    return false
+}
+
+; 点面板里的"弹出成独立窗口"按钮。点到了返回 true。
+; 只对老版 Chrome 有意义——新版点完工具栏按钮就直接出独立窗口了，根本没有这个按钮
+; （2026-09-14 实测：点完之后把主窗口里所有按钮全列出来，没有任何一个带 Pop）。
+; 留着是为了兼容还没更新的 Chrome；找不到就当作不需要，不能因此判定失败。
+InvokeGeminiPopOutButton(chromeHwnd)
+{
+    try {
+        for el in UIA.ElementFromHandle(chromeHwnd).FindAll({Type: "Button"})
+        {
+            try {
+                nm := el.Name
+                if (nm != "" && (InStr(nm, "Pop-out") || InStr(nm, "Pop out"))) {
+                    el.Invoke()
+                    return true
+                }
+            }
+        }
+    }
+    return false
+}
+
 ; 自动打开 Gemini 独立窗口，成功返回窗口句柄，失败返回 0。
-; 两步：点标签栏的 "Ask Gemini" 打开面板 → 点面板里的 "Pop-out chat" 弹成独立窗口。
 ;
 ; 为什么不用快捷键：Alt+G 在 Chrome 上并没有绑定（实测激活 Chrome 后发 !g，
 ; 6 秒内无任何窗口变化），原先那行 Send("!g") 是空操作，这正是一直要手动开窗口的原因。
-; 这两个按钮都是标准 UIA Button（支持 Invoke），是目前唯一稳定的入口。
+; 工具栏那个按钮是标准 UIA Button（支持 Invoke），是目前唯一稳定的入口。
+;
+; 流程原本写死成"点工具栏开面板 → 点面板里的弹出按钮 → 等窗口"三步，新版 Chrome 把
+; 中间一步取消了（直接出独立窗口，约 2~3 秒），于是第二步雷打不动空转满 8 秒，
+; 再加第三步的 5 秒，最后照样报错。现在改成：点一下开关，然后在一个循环里边等窗口
+; 边顺手试弹出按钮，谁先成谁算——新老 Chrome 都能走通，也不再白等。
 OpenGeminiWindow()
 {
     ; 窗口其实已经存在、只是被隐藏了，直接复用，不要再去点按钮
@@ -688,7 +748,9 @@ OpenGeminiWindow()
     chromeHwnd := GetMainChromeWindow()
     if (!chromeHwnd)
     {
-        ; Chrome 没启动：拉起来再等主窗口出现
+        ; 没有浏览器主窗口。可能 Chrome 压根没启动，也可能它还活着但只剩下
+        ; 弹出的 Gemini 窗口（把主窗口关掉、Gemini 窗口留着，实测就是这个状态）。
+        ; 两种情况都是再 Run 一次 chrome.exe：没启动就拉起来，已经在跑就开个新窗口。
         try {
             Run("chrome.exe")
         } catch {
@@ -713,39 +775,40 @@ OpenGeminiWindow()
         return 0
     Sleep(200)
 
-    ; 1) 打开 Gemini 面板。该按钮是开关：面板关着时叫 "Ask Gemini"，
-    ;    开着时变成 "Close Gemini in Chrome"。只在找得到 "Ask Gemini" 时点，
-    ;    否则会把已经开着的面板关掉。找不到 = 面板已开，直接进入第 2 步。
-    try {
-        UIA.ElementFromHandle(chromeHwnd).FindElement({Name: "Ask Gemini", Type: "Button"}).Invoke()
-    }
+    ; 1) 让开关复位。走到这里说明上面既没找到可见窗口也没找到隐藏窗口，
+    ;    可按钮要是写着 "Close Gemini in Chrome"，就说明 Chrome 自己还认为开着
+    ;    （用户把弹出窗口点叉关掉时就会这样）。此时直接点它只会再关一次，
+    ;    什么都不会出来，所以先点一下让它回到"关"，再点一下打开。
+    if (InvokeGeminiToolbarButton(chromeHwnd, true))
+        Sleep(800)
 
-    ; 2) 弹成独立窗口。面板要渲染一会儿才会出现 "Pop-out chat"（实测约 1 秒，
-    ;    Chrome 冷启动时更久），所以轮询；每轮重新取一次 UIA 根元素，
-    ;    避免拿到面板出现之前的旧树。
-    deadline := A_TickCount + 8000
-    while (A_TickCount < deadline)
-    {
-        try {
-            UIA.ElementFromHandle(chromeHwnd).FindElement({Name: "Pop-out chat", Type: "Button"}).Invoke()
-            break
-        }
-        Sleep(200)
-    }
+    why := ""
+    if (!InvokeGeminiToolbarButton(chromeHwnd, false))
+        why := "标签栏上找不到 Gemini 按钮"
 
-    ; 3) 等独立窗口出现（实测点完约 100~500ms 就能被 GetGeminiWindow 找到）
-    deadline := A_TickCount + 5000
+    ; 2) 等独立窗口出现。新版 Chrome 点完直接出（约 2~3 秒）；
+    ;    老版要先在面板里点"弹出"，所以每隔 1 秒顺手试一次，试不到也不算失败。
+    deadline := A_TickCount + 12000
+    nextPop := A_TickCount + 1000
     while (A_TickCount < deadline)
     {
         hwnd := GetGeminiWindow()
         if (hwnd)
             return hwnd
-        Sleep(200)
+        if (A_TickCount >= nextPop)
+        {
+            InvokeGeminiPopOutButton(chromeHwnd)
+            nextPop := A_TickCount + 1000
+        }
+        Sleep(150)
     }
+    if (why = "")
+        why := "按钮点到了，但 12 秒内没出现独立窗口"
 
     ; 走到这里说明 Chrome 的 Gemini 入口和预期不一样（改版、换了界面语言等）。
     ; 不提示的话 F2 就是按下去毫无反应，没法判断是脚本坏了还是没按到。
-    MsgBox("未能自动打开 Gemini 窗口，请手动打开一次。", "提示", "T3")
+    ; 把具体卡在哪一步也带上，下次一看就知道要去查什么。
+    MsgBox("未能自动打开 Gemini 窗口，请手动打开一次。`n原因：" . why, "提示", "T5")
     return 0
 }
 
