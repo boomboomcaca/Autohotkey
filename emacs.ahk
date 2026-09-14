@@ -584,6 +584,18 @@ XButton2::GeminiToggle()
 { ; V1toV2: Added opening brace for [^!down]
   ; 注意：这里不用 global 模式——否则块内所有临时变量（GeminiHwnd/Width/mi 等）都会变成全局变量，
   ; 与 F2 里的局部 GeminiHwnd 同名（#Warn LocalSameAsGlobal 会报警）
+  ;
+  ; 抑制键盘自动重复：按住不放时本热键会一次不落地连发（实测按住约 300ms 触发 9 次，
+  ; 窗口被反复居中）。尤其是按住 Alt+↓ 用键盘移鼠标时再补按 Ctrl，就会落进本热键
+  ; （实测 mousekeys 的 *!Down 会自动让位给它）。
+  ; 这里不能用 KeyWait("Down") 等松开：热键已经把按键吃掉了，被吃掉的键不写入系统按键状态，
+  ; 函数里读 GetKeyState("Down") 恒为 0（逻辑、物理都是），KeyWait 会立刻返回、拦不住。
+  ; 自动重复间隔约 30ms，真人有意再按一次不会快于 400ms，用时间去抖最省事。
+  static lastCenterTick := 0
+  if (lastCenterTick && A_TickCount - lastCenterTick < 400)
+    return
+  lastCenterTick := A_TickCount
+
   ActiveWindowID := WinGetID("A") ; 活动窗口句柄
   if (!ActiveWindowID)
     return
