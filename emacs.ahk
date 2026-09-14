@@ -84,13 +84,6 @@ delete_backward_char()
   global is_pre_spc := ""
   Return
 }
-delete_backward_word()
-{
-  Send("^+{Left}")
-  Send("{BS}")
-  global is_pre_spc := ""
-  Return
-}
 kill_line()
 {
   Send("{ShiftDown}{END}{ShiftUp}")
@@ -274,24 +267,7 @@ scroll_down()
   Return
 }
 
-!k::
-{ ; V1toV2: Added opening brace for [!k]
-global ; V1toV2: Made function global
-  if is_target()
-    Send(A_ThisHotkey)
-  else
-    Send("^{Tab}")
-return
-} ; V1toV2: Added closing brace for [!k]
-+!k::
-{ ; V1toV2: Added opening brace for [+!k]
-global ; V1toV2: Made function global
-  if is_target()
-    Send(A_ThisHotkey)
-  else
-    Send("^+{Tab}")
-Return
-} ; V1toV2: Added closing brace for [+!k]
+
 ^q::
 { ; V1toV2: Added opening brace for [^q]
 global ; V1toV2: Made function global
@@ -410,15 +386,6 @@ global ; V1toV2: Made function global
     quit()
 Return
 } ; V1toV2: Added closing brace for [^g]
-!h::
-{ ; V1toV2: Added opening brace for [!h]
-global ; V1toV2: Made function global
-  if is_target()
-    Send(A_ThisHotkey)
-  else
-    delete_backward_word()
-return
-} ; V1toV2: Added closing brace for [!h]
 ^s::
 { ; V1toV2: Added opening brace for [^s]
 global ; V1toV2: Made function global
