@@ -16,3 +16,5 @@ Thumbs.db
 # 临时文件
 *.tmp
 *.log
+# Claude Code 的本机配置与临时文件（settings.local.json 按设计就是本机专用）
+.claude/

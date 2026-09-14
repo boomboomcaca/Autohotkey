@@ -111,18 +111,6 @@ quit()
   global is_pre_spc := ""
   Return
 }
-indent_for_tab_command()
-{
-  Send("{Tab}")
-  global is_pre_spc := ""
-  Return
-}
-newline_and_indent()
-{
-  Send("{Enter}{Tab}")
-  global is_pre_spc := ""
-  Return
-}
 isearch_current_file()
 {
   Send("^f")
@@ -144,24 +132,6 @@ kill_region()
 kill_ring_save()
 {
   Send("^c")
-  global is_pre_spc := ""
-  Return
-}
-yank()
-{
-  Send("^v")
-  global is_pre_spc := ""
-  Return
-}
-undo()
-{
-  Send("^z")
-  global is_pre_spc := ""
-  Return
-}
-redo()
-{
-  Send("+^z")
   global is_pre_spc := ""
   Return
 }
