@@ -1,9 +1,10 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; 键盘控制鼠标：按住 Alt + 方向键
 ;;
-;;   Alt + ↑↓←→           移动光标，按住逐渐加速，松开 Alt 即停
-;;                        前 0.2 秒温和（便于短距离微调），之后切入高速档奔袭
-;;   Alt + Shift + ↑↓←→   拖动：自动压住左键并移动，松开 Alt 时放开
+;;   Alt + h j k l        移动光标（Vim 布局：h=左 j=下 k=上 l=右）
+;;                        按住逐渐加速；前 0.2 秒温和便于微调，之后切入高速档奔袭
+;;   Alt + Shift + hjkl   拖动：自动压住左键并移动；Alt 或 Shift 任一松开即放下。
+;;                        中途补按 Shift 也能起拖（不必一开始就按着）
 ;;
 ;;   Alt + Enter          左键单击
 ;;   Alt + /              右键单击
@@ -12,10 +13,12 @@
 ;; 无模式切换，按住 Alt 即用。
 ;;
 ;; 已知冲突（都是全局接管按键的必然结果，不是 bug）：
-;;   1) Alt+← 和 Alt+→ 原本是浏览器后退/前进，本模块接管它们。
-;;      想保留的话把 MK_ModAlt 改成 "RAlt"，改用右 Alt 触发。
+;;   1) 按住 Alt 时 h j k l 被本模块吃掉，打不出这四个字母。
+;;      原先占用这几个键的 emacs 绑定已移除：Alt+H（删左词）、Alt+K / Alt+Shift+K（切标签页）。
+;;      切标签仍可用原生的 Ctrl+Tab / Ctrl+Shift+Tab。
 ;;   2) Alt+Enter 被本模块吃掉，Chrome 地址栏"新标签打开"、Excel 单元格内换行、
 ;;      资源管理器"属性"等原生功能在全局失效。
+;;   注：改用 hjkl 后方向键已还给系统，Alt+←/→ 恢复为浏览器的后退/前进。
 ;;
 ;; 实现要点：方向键必须显式跟踪。热键会「吃掉」按键，被吃掉的键不会写入
 ;; 系统按键状态，GetKeyState 永远读不到，所以按下与松开各注册一个热键。
@@ -42,12 +45,6 @@ global MK_Tick         := 8       ; 定时器周期（毫秒）
 global MK_WheelRepeat  := 70      ; 滚轮连发间隔（毫秒）
 global MK_MaxHoldMs    := 6000    ; 单个方向键最长持续时间，超时即判定松开事件丢失
 
-; 菜单屏蔽键。MK_Click 里要临时松开 Alt，若这次 Alt 按下期间应用没见过任何按键，
-; 松开那一刻 Windows 会把它当成"激活菜单栏"（Win32 菜单高亮、Chrome 聚焦 ⋮）。
-; 必须用 AHK 自己的 A_MenuMaskKey（本机为 Ctrl vk11sc01D）；
-; 早先手写的 vkE8 不起屏蔽作用，实测 13 次全部误激活了菜单。
-global MK_MaskKey      := "{" . A_MenuMaskKey . "}"
-
 ; ---------------- 运行期状态 ----------------
 global MK_Vel        := 0.0
 global MK_AccX       := 0.0       ; 亚像素累积，低速时才不会因取整而原地不动
@@ -59,14 +56,22 @@ global MK_BurstSince := 0         ; 本次连续移动的起始时刻，0 = 当�
 global MK_WheelDir   := 0         ; 滚轮连发方向：+1 上 / -1 下 / 0 没在滚
 global MK_WheelSince := 0         ; 本次滚轮连发的起始时刻，用于超时兜底
 
-; 用逻辑状态而非 "P" 物理状态：物理状态读不到程序注入的按键。
-MK_AltDown() {
+; 判定"用户是不是按着 Alt"。必须用物理状态 "P"，也是本模块所有热键改用 #HotIf
+; 自行判定、而不是写成 !Up / !Enter 的原因：
+;
+; MK_Click 点击前会临时松开 Alt（否则应用收到的是 Alt+点击，Chrome 里点链接会变成下载）。
+; 松开之后逻辑 Alt = 0 而物理 Alt = 1。实测 AHK 不会从物理状态重新同步，
+; 于是 !Up 之类带 Alt 修饰的热键立刻失配，方向键直接漏给应用。
+; 以前靠"点完立刻把 Alt 按回去"来兜，但那一下会掐死点击刚打开的菜单——
+; 收藏栏文件夹只闪一下高亮、下拉永远出不来。
+; 改成物理判定后就不必再把 Alt 按回去，两个问题一起解决。
+MK_AltHeld() {
     global MK_ModAlt
     if (MK_ModAlt = "LAlt")
-        return GetKeyState("LAlt")
+        return GetKeyState("LAlt", "P")
     if (MK_ModAlt = "RAlt")
-        return GetKeyState("RAlt")
-    return GetKeyState("LAlt") || GetKeyState("RAlt")
+        return GetKeyState("RAlt", "P")
+    return GetKeyState("LAlt", "P") || GetKeyState("RAlt", "P")
 }
 
 MK_Press(k) {
@@ -112,7 +117,7 @@ MK_Step() {
     global MK_Dragging   ; 少了这行，下面的赋值会写进局部变量，
                          ; 全局 MK_Dragging 恒为 false → 每 8ms 压一次左键且永不放开
 
-    if (!MK_AltDown()) {
+    if (!MK_AltHeld()) {
         MK_Stop()
         return
     }
@@ -121,11 +126,17 @@ MK_Step() {
     ; 否则"先按住 Alt+方向键开始移动、中途再补按 Shift"就进不了拖动，
     ; 而这正是常见的用法——先把光标挪到起点附近，再按 Shift 开拖。
     ; 补按 Shift 的那一拍压下左键，本拍的移动发生在其后，所以不会漏掉起点。
-    ; 松开 Shift 不结束拖动：以松开 Alt 为准（见 MK_Stop），
-    ; 免得拖到一半手指松一下 Shift 就把东西掉在半路。
-    if (GetKeyState("Shift") && !MK_Dragging) {
-        Click("Left Down")
-        MK_Dragging := true
+    ;
+    ; Alt 和 Shift 任一松开都结束拖动：Shift 在这里判（松手即放下），
+    ; Alt 在 MK_Stop 里判（整个模块都停）。
+    if (GetKeyState("Shift")) {
+        if (!MK_Dragging) {
+            Click("Left Down")
+            MK_Dragging := true
+        }
+    } else if (MK_Dragging) {
+        Click("Left Up")
+        MK_Dragging := false
     }
 
     ; 保险：松开事件偶尔会丢失，导致光标一直跑。超过上限就强制视为已松开。
@@ -192,19 +203,22 @@ MK_Step() {
     }
 }
 
-; 单击。直接 Click 不行：用户物理按着 Alt，应用会把点击当成 Alt+点击——
-; Chrome 里 Alt+点链接 = 下载，VS Code 里 Alt+点击 = 加一个光标
-; （真人实测：改之前 12 次点击到达时全部 Alt=1，改之后为 Alt=0）。
-; 所以先逻辑松开 Alt 再点、点完按回。两处都要发屏蔽键：
-; 松开前发，避免"这次 Alt 按下期间没按过键"被判成激活菜单；
-; 按回后再发一次，否则用户之后物理松开 Alt 时同样会激活菜单。
-; NoTimers：这几毫秒里不让 MK_Step / MK_WheelTick 插队，它们的 Alt 自查会把这次松开当成用户松手。
+; 单击。点之前把 Alt 逻辑松开，点完【不】按回去。
+;
+; 不松开的话应用收到的是 Alt+点击：Chrome 里点收藏栏链接会变成下载而不是打开。
+; 点完不按回，是因为那一下会把点击刚打开的菜单掐掉——收藏栏文件夹只闪一下高亮、
+; 下拉永远出不来。两个都是实际遇到过的问题。
+;
+; 不按回也不影响方向键，前提是热键用 #HotIf MK_AltHeld() 自行判定物理 Alt，
+; 而不是写成 !Up（那种写法只认 AHK 跟踪的逻辑状态，松开后立刻失配）。
+;
+; 松开前发一次 A_MenuMaskKey：否则"这次 Alt 按下期间应用没见过任何按键"，
+; 用户之后物理松开 Alt 时 Windows 会判成激活菜单栏。
+; NoTimers：这几毫秒里不让 MK_Step / MK_WheelTick 插队。
 MK_Click(btn) {
-    global MK_MaskKey
     Thread("NoTimers", true)
-    Send("{Blind}" . MK_MaskKey . "{Alt up}")
+    Send("{Blind}{" . A_MenuMaskKey . "}{LAlt up}{RAlt up}")
     Click(btn)
-    Send("{Blind}{Alt down}" . MK_MaskKey)
     Thread("NoTimers", false)
 }
 
@@ -244,7 +258,7 @@ MK_WheelStop() {
 
 MK_WheelTick() {
     global MK_WheelDir, MK_WheelSince, MK_MaxHoldMs
-    if (!MK_WheelDir || !MK_AltDown() || (A_TickCount - MK_WheelSince) > MK_MaxHoldMs) {
+    if (!MK_WheelDir || !MK_AltHeld() || (A_TickCount - MK_WheelSince) > MK_MaxHoldMs) {
         MK_WheelStop()
         return
     }
@@ -255,19 +269,31 @@ MK_WheelTick() {
 ; * 前缀：允许同时按着 Shift / Ctrl 等其他修饰键，不影响触发。
 ; 保留它是为了别让 Alt+Shift+方向 之类的组合突然变成"什么都不做"
 
-*!Up::MK_Press("U")
-*!Up Up::MK_Release("U")
-*!Down::MK_Press("D")
-*!Down Up::MK_Release("D")
-*!Left::MK_Press("L")
-*!Left Up::MK_Release("L")
-*!Right::MK_Press("R")
-*!Right Up::MK_Release("R")
+; 全部走 #HotIf MK_AltHeld()，而不是写成 !Up / !Enter：
+; 后者只在 AHK 跟踪的【逻辑】Alt 为按下时匹配，而 MK_Click 会把逻辑 Alt 松开，
+; 之后手指虽然还按着，方向键也会全部失配、直接漏给应用（已实测）。
+; 条件为假时这些热键根本不存在，所以不按 Alt 时方向键 / Enter / 斜杠一切如常。
+#HotIf MK_AltHeld()
 
-!Enter::MK_Click("Left")
-!/::MK_Click("Right")
+; Vim 布局：h=左 j=下 k=上 l=右。
+; 用字母而不是方向键，是为了把 Alt+←/→ 还给浏览器的前进后退。
+*h::MK_Press("L")
+*h Up::MK_Release("L")
+*j::MK_Press("D")
+*j Up::MK_Release("D")
+*k::MK_Press("U")
+*k Up::MK_Release("U")
+*l::MK_Press("R")
+*l Up::MK_Release("R")
 
-*!PgUp::MK_WheelStart(1)
-*!PgUp Up::MK_WheelStop()
-*!PgDn::MK_WheelStart(-1)
-*!PgDn Up::MK_WheelStop()
+; 这两个也必须带 * ：不带通配符的热键要求"没有任何修饰键按着"，
+; 而这里恰恰是在按着 Alt 的前提下触发，漏了 * 就永远不匹配。
+*Enter::MK_Click("Left")
+*SC035::MK_Click("Right")   ; SC035 = 斜杠键，写扫描码避免 */ 被解析歧义
+
+*PgUp::MK_WheelStart(1)
+*PgUp Up::MK_WheelStop()
+*PgDn::MK_WheelStart(-1)
+*PgDn Up::MK_WheelStop()
+
+#HotIf
