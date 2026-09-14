@@ -142,9 +142,7 @@ CloseWordGui()
   g_HoverTarget := ""
 
   ; 彻底清理临时文件
-  try FileDelete(g_WL_StreamFile)
-  try FileDelete(A_Temp . "\ahk_wl_request_word.json")
-  try FileDelete(A_Temp . "\ahk_wl_curl.cfg")
+  CurlCleanupTempFiles("wl")
 
   ; 销毁 GUI
   if (g_WL_Gui != "") {
@@ -209,11 +207,12 @@ WL_PregenTts(word)
   if (oldFile != "" && oldFile != g_WL_TtsFile)
     try FileDelete(oldFile)
 
-  escapedText := EscapeTtsArg(text)
-  try {
-    Run('edge-tts --voice en-US-AriaNeural --text "' . escapedText . '" --write-media "' . g_WL_TtsFile . '"', , "Hide", &outPid)
+  ; 显式指定英文语音：取词查的本来就是英文单词，
+  ; 交给 RunEdgeTts 自动判断会把"中"这类中英同形的输入误判成中文
+  outPid := RunEdgeTts(text, g_WL_TtsFile, "en-US-AriaNeural")
+  if (outPid) {
     g_WL_TtsPid := outPid
-    g_WL_TtsGenTick := A_TickCount
+    g_WL_TtsGenTick := A_TickCount  ; 启动失败就不刷新，保持重构前的行为
   }
 }
 
@@ -313,19 +312,12 @@ WL_PlaySentenceTts(sentence)
   if (oldFile != "" && oldFile != g_WL_TtsFile)
     try FileDelete(oldFile)
   
-  isChinese := RegExMatch(sentence, "[\x{4e00}-\x{9fff}]")
-  voice := isChinese ? "zh-CN-XiaoxiaoNeural" : "en-US-AriaNeural"
-  
-  escapedText := EscapeTtsArg(sentence)
-
-  try {
-    ; 用高级微软 Aria 真人神经网络语音生成完整句子（真人语调，且多音字 100% 正确）
-    Run('edge-tts --voice ' . voice . ' --text "' . escapedText . '" --write-media "' . g_WL_TtsFile . '"', , "Hide", &outPid)
+  ; 整句朗读按内容自动判断中英（与单词朗读不同，句子里的中文是真中文）
+  outPid := RunEdgeTts(sentence, g_WL_TtsFile)
+  if (outPid) {
     g_WL_TtsPid := outPid
     g_WL_TtsGenTick := A_TickCount
-
-    ; 轮询播放
-    SetTimer(WL_PlayTtsOnce_Check, -50)
+    SetTimer(WL_PlayTtsOnce_Check, -50)  ; 轮询播放
   }
 }
 
@@ -631,7 +623,10 @@ WL_CleanupOnExit(*)
       }
     }
   }
-  for name in ["ahk_wl_tts_*.mp3", "ahk_wl_sentence_*.mp3", "ahk_tts_edge.mp3", "ahk_tts_hover.mp3", "ahk_wl_stream_word.txt", "ahk_wl_request_word.json", "ahk_wl_curl.cfg", "ahk_chat_stream.txt", "ahk_chat_request.json", "ahk_chat_curl.cfg"]
+  CurlCleanupTempFiles("wl")
+  CurlCleanupTempFiles("chat")
+  ; 重构前 word_lookup 的两个临时文件叫 *_word.*，这里清掉老版本留下的残留，清完不会再生成
+  for name in ["ahk_wl_tts_*.mp3", "ahk_wl_sentence_*.mp3", "ahk_tts_edge.mp3", "ahk_tts_hover.mp3", "ahk_wl_stream_word.txt", "ahk_wl_request_word.json"]
     try FileDelete(A_Temp . "\" . name)
 }
 OnExit(WL_CleanupOnExit)

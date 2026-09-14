@@ -93,6 +93,64 @@ ReadTextFileUtf8(filePath)
     return content
 }
 
+; ===== 解析 OpenAI 兼容的 SSE 流，返回拼接后的正文 =====
+; 三个调用方（取词浮窗、Prompt 对话、翻译窗）此前各有一份逐行相同的拷贝，
+; 改一个字段名就要同步改三处、漏一处就是某条链路静默返回空串，故收归此处。
+;
+; 只负责"从流里把正文抠出来"，不做 Trim、不压缩空行、不过滤 Emoji——
+; 这些各调用方的要求不一样（流式热路径上还要避免重复执行），留给调用方自己做。
+;
+; 遇到接口错误体时立即停止解析，把消息写进 errMsg 并返回已拼接的内容。
+; 调用方只要 errMsg 非空就应当优先显示它：流到一半才报错时，
+; 继续显示那半截内容会让用户以为回答已经完整。
+;
+; errMsg 是必填的输出参数，不用写成可选：AHK v2 里 "&errMsg := """ 并不能让 ByRef 参数变成可选，
+; 省略实参会直接报加载期错误（v2 的可选 ByRef 写法是 &errMsg?）。
+; 不关心错误的调用方传一个丢弃用的变量即可。
+ParseSseContent(rawText, &errMsg)
+{
+    errMsg := ""
+    result := ""
+    if (rawText = "")
+        return ""
+
+    Loop Parse, rawText, "`n", "`r"
+    {
+        line := Trim(A_LoopField)
+        if (line = "")
+            continue
+
+        ; SSE 格式: 每行以 "data: " 开头
+        if (SubStr(line, 1, 6) = "data: ")
+            line := SubStr(line, 7)
+
+        ; 跳过结束标记
+        if (line = "[DONE]")
+            continue
+
+        if (!InStr(line, "{"))
+            continue
+
+        ; 错误体的两种形态：{"error":{"message":"..."}} 与 {"error":"..."}。
+        ; 正文里出现的 "error" 会被转义成 \"error\"，不会匹配到这里
+        if RegExMatch(line, '"error"\s*:\s*\{[^}]*"message"\s*:\s*"((?:[^"\\]|\\.)*)"', &m)
+        {
+            errMsg := StrReplace(StrReplace(m[1], "\n", "`n"), '\"', '"')
+            return result
+        }
+        if RegExMatch(line, '"error"\s*:\s*"((?:[^"\\]|\\.)*)"', &m)
+        {
+            errMsg := StrReplace(StrReplace(m[1], "\n", "`n"), '\"', '"')
+            return result
+        }
+
+        ; OpenAI 格式: choices[0].delta.content / choices[0].message.content
+        if RegExMatch(line, '"content"\s*:\s*"((?:[^"\\]|\\.)*)"', &m)
+            result .= UnescapeApiJson(m[1])
+    }
+    return result
+}
+
 ; ===== 从响应正文中提取接口错误信息 =====
 ; curl 用 -s 且不带 -f 时，HTTP 4xx/5xx 的退出码仍然是 0，错误 JSON 被原样写进 -o 指定的文件；
 ; 而 SSE 解析器只认 "content" 字段，错误体里没有这个键，解析结果就是空串。
@@ -118,6 +176,65 @@ ExtractApiError(rawText)
     if RegExMatch(rawText, '"type"\s*:\s*"([^"]+)"', &t)
         detail := (detail = "") ? t[1] : detail . " " . t[1]
     return (detail = "") ? msg : msg . " (" . detail . ")"
+}
+
+; ===== curl 流式请求 =====
+; 一次请求要用三个临时文件，路径统一由 prefix 派生。
+; 此前这些文件名以字面量散落在各模块里（ahk_wl_curl.cfg 一个名字就出现在 5 处），
+; 改名要同步改 6 个地方，漏一处轻则 TEMP 里留垃圾，
+; 重则删不掉那个写着 API key 的 cfg 文件。
+CurlStreamFile(prefix)  => A_Temp . "\ahk_" . prefix . "_stream.txt"
+CurlRequestFile(prefix) => A_Temp . "\ahk_" . prefix . "_request.json"
+CurlConfigFile(prefix)  => A_Temp . "\ahk_" . prefix . "_curl.cfg"
+
+; 删除一次请求留下的全部临时文件。cfg 里写着 API key，任何收尾路径都必须删到它
+CurlCleanupTempFiles(prefix)
+{
+    try FileDelete(CurlStreamFile(prefix))
+    try FileDelete(CurlRequestFile(prefix))
+    try FileDelete(CurlConfigFile(prefix))
+}
+
+; 用 curl.exe 发起一次 OpenAI 兼容的流式请求，响应由 curl 直接写进 CurlStreamFile(prefix)，
+; 调用方轮询该文件即可。
+;
+; 用 curl 而不是 WinHttp：兼容 TUN 模式代理。
+; Authorization 写进 -K 配置文件而不是命令行：命令行参数本机任意进程都能从进程列表读到，
+; 直接写在命令行上等于公开 API key。
+;
+; 返回 {pid, stage, detail}：
+;   pid    成功时为 curl 进程 PID，失败为 0
+;   stage  失败环节——"tempfile"（临时文件写不进去）或 "curl"（curl.exe 起不来）
+;   detail curl 环节的异常消息，供调用方拼进提示
+; 只报告失败、不显示提示、也不复位调用方的 pending 状态：
+; 各调用方的报错界面和状态变量都不一样，硬塞进来只会把耦合搬个地方。
+StartCurlStream(prefix, json, timeoutSec)
+{
+    global g_MistralApiKey, g_MistralEndpoint
+
+    jsonFile := CurlRequestFile(prefix)
+    curlCfg := CurlConfigFile(prefix)
+    CurlCleanupTempFiles(prefix)
+
+    try {
+        FileAppend(json, jsonFile, "UTF-8-RAW")
+        FileAppend('header = "Authorization: Bearer ' . g_MistralApiKey . '"`n', curlCfg, "UTF-8-RAW")
+    } catch {
+        return {pid: 0, stage: "tempfile", detail: ""}
+    }
+
+    try {
+        curlCmd := 'curl.exe -s -N --connect-timeout 10 -m ' . timeoutSec
+                 . ' -X POST "' . g_MistralEndpoint . '"'
+                 . ' -H "Content-Type: application/json"'
+                 . ' -K "' . curlCfg . '"'
+                 . ' -d "@' . jsonFile . '"'
+                 . ' -o "' . CurlStreamFile(prefix) . '"'
+        Run(curlCmd, , "Hide", &outPid)
+        return {pid: outPid, stage: "", detail: ""}
+    } catch Error as e {
+        return {pid: 0, stage: "curl", detail: e.Message}
+    }
 }
 
 ; ===== Prompt 正文在 ini 中的转义 =====

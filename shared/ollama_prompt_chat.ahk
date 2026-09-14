@@ -501,43 +501,24 @@ StartChatAsync(question)
   ; 构建 JSON (使用流式，OpenAI 格式)
   json := '{"model":"' . g_MistralModel . '","messages":[{"role":"system","content":"' . sysPrompt . '"},{"role":"user","content":"' . prompt . '"}],"temperature":0.7,"max_tokens":2048,"stream":true}'
 
-  ; 使用 curl.exe 调用 API（与 word_lookup 一致，兼容 TUN 代理）
-  g_StreamFileChat := A_Temp . "\ahk_chat_stream.txt"
-  jsonFile := A_Temp . "\ahk_chat_request.json"
-  curlCfg := A_Temp . "\ahk_chat_curl.cfg"
-  try FileDelete(g_StreamFileChat)
-  try FileDelete(jsonFile)
-  try FileDelete(curlCfg)
+  g_StreamFileChat := CurlStreamFile("chat")
 
-  try {
-    FileAppend(json, jsonFile, "UTF-8-RAW")
-    ; Authorization 头写入 curl 配置文件而非命令行：
-    ; 命令行参数可被本机任意进程通过进程列表查看，会暴露 API key
-    FileAppend('header = "Authorization: Bearer ' . g_MistralApiKey . '"`n', curlCfg, "UTF-8-RAW")
-  } catch {
+  req := StartCurlStream("chat", json, 120)
+  if (!req.pid) {
     ; 调用方 Gui_SendQuestion 已把 g_ChatPending 置 true，而轮询定时器还没启动，
     ; 直接 return 会让状态一直挂着，必须复位
     g_ChatPending := false
-    try g_AnswerEditCtrl.Value := "请求启动失败: 无法写入临时文件"
+    try g_AnswerEditCtrl.Value := "请求启动失败: " . (req.stage = "tempfile" ? "无法写入临时文件" : req.detail)
     try g_SendBtnCtrl.Enabled := true
     return
   }
 
-  try {
-    curlCmd := 'curl.exe -s -N --connect-timeout 10 -m 120 -X POST "' . g_MistralEndpoint . '" -H "Content-Type: application/json" -K "' . curlCfg . '" -d "@' . jsonFile . '" -o "' . g_StreamFileChat . '"'
-    Run(curlCmd, , "Hide", &outPid)
-    g_StreamPidChat := outPid
-    g_ChatPending := true
-    global g_ChatStartTick, g_ChatStreamFileSize, g_ChatLastDataTick
-    g_ChatStartTick := A_TickCount
-    g_ChatLastDataTick := A_TickCount
-    g_ChatStreamFileSize := 0
-  } catch Error as e {
-    g_ChatPending := false  ; 同上：定时器未启动，状态必须复位
-    try g_AnswerEditCtrl.Value := "请求启动失败: " . e.Message
-    try g_SendBtnCtrl.Enabled := true
-    return
-  }
+  g_StreamPidChat := req.pid
+  g_ChatPending := true
+  global g_ChatStartTick, g_ChatStreamFileSize, g_ChatLastDataTick
+  g_ChatStartTick := A_TickCount
+  g_ChatLastDataTick := A_TickCount
+  g_ChatStreamFileSize := 0
   
   ; 启动轮询定时器
   SetTimer(CheckChatResult, 100)
@@ -631,47 +612,15 @@ CheckChatResult()
     SetTimer(CheckChatResult, 0)
     
     ; 清理临时文件
-    try FileDelete(g_StreamFileChat)
-    try FileDelete(A_Temp . "\ahk_chat_request.json")
-    try FileDelete(A_Temp . "\ahk_chat_curl.cfg")
+    CurlCleanupTempFiles("chat")
   }
 }
 
 Chat_ReadStreamContent(filePath)
 {
-  if (!FileExist(filePath))
-    return ""
-  
-  try {
-    f := FileOpen(filePath, "r", "UTF-8")
-    if (!f)
-      return ""
-    content := f.Read()
-    f.Close()
-  } catch {
-    return ""
-  }
-  
-  ; 解析 OpenAI SSE 流式 JSON
-  result := ""
-  Loop Parse, content, "`n", "`r"
-  {
-    line := Trim(A_LoopField)
-    if (line = "")
-      continue
-    if (SubStr(line, 1, 6) = "data: ")
-      line := SubStr(line, 7)
-    if (line = "[DONE]")
-      continue
-    if (!InStr(line, "{"))
-      continue
-    if RegExMatch(line, '"content"\s*:\s*"((?:[^"\\]|\\.)*)"', &m) {
-      token := UnescapeApiJson(m[1])
-      result .= token
-    }
-  }
-  
-  result := Trim(result)
+  ; 读取与 SSE 解析都在 shared/ollama_api.ahk，此处只做本模块特有的后处理。
+  ; 接口错误不在这里处理：调用方解析出空串后会用 ExtractApiError 读原始响应给出提示
+  result := Trim(ParseSseContent(ReadTextFileUtf8(filePath), &ignoredErr))
   result := RegExReplace(result, "(\r?\n\s*){2,}", "`n")
   return result
 }
@@ -883,50 +832,13 @@ ParseStreamData(rawContent, &accumulatedContent)
 {
   if (rawContent = "")
     return accumulatedContent
-  
-  result := ""
-  Loop Parse, rawContent, "`n", "`r"
-  {
-    line := Trim(A_LoopField)
-    if (line = "")
-      continue
-    
-    ; OpenAI SSE 格式: 每行以 "data: " 开头
-    if (SubStr(line, 1, 6) = "data: ") {
-      line := SubStr(line, 7)
-    }
-    
-    ; 跳过 [DONE] 标记
-    if (line = "[DONE]")
-      continue
-    
-    if (!InStr(line, "{"))
-      continue
-    
-    ; 增加对错误的检测
-    if RegExMatch(line, '"error"\s*:\s*\{[^}]*"message"\s*:\s*"((?:[^"\\]|\\.)*)"', &m) {
-      errorMsg := m[1]
-      errorMsg := StrReplace(errorMsg, "\n", "`n")
-      errorMsg := StrReplace(errorMsg, '\"', '"')
-      return "错误: " . errorMsg
-    }
-    
-    ; 也检测简单的 error 字符串格式
-    if RegExMatch(line, '"error"\s*:\s*"((?:[^"\\]|\\.)*)"', &m) {
-      errorMsg := m[1]
-      errorMsg := StrReplace(errorMsg, "\n", "`n")
-      errorMsg := StrReplace(errorMsg, '\"', '"')
-      return "错误: " . errorMsg
-    }
-    
-    ; OpenAI 格式: 提取 choices[0].delta.content 或 choices[0].message.content
-    if RegExMatch(line, '"content"\s*:\s*"((?:[^"\\]|\\.)*)"', &m) {
-      ; 基础转义还原
-      token := UnescapeApiJson(m[1])
-      result .= token
-    }
-  }
-  
+
+  ; 解析逻辑在 shared/ollama_api.ahk；这里保留本函数特有的
+  ;「解析不出内容就原样返回上次累积值」语义和错误前缀
+  result := ParseSseContent(rawContent, &errMsg)
+  if (errMsg != "")
+    return "错误: " . errMsg
+
   if (result != "") {
     result := RegExReplace(result, "(\r?\n\s*){2,}", "`n")
     accumulatedContent := result ; 性能优化: StripEmoji 移至最终结果时统一调用

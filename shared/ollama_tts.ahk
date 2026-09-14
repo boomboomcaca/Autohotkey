@@ -73,6 +73,26 @@ EscapeTtsArg(text)
   return StrReplace(text, '"', '\"')
 }
 
+; ===== 按文本内容挑选朗读语音 =====
+; 含汉字用中文女声，否则用英文女声。
+; 这两行此前在三处各抄了一遍（点击朗读、悬停朗读、取词整句朗读），换语音要改三个地方
+TtsVoiceFor(text) => RegExMatch(text, "[\x{4e00}-\x{9fff}]") ? "zh-CN-XiaoxiaoNeural" : "en-US-AriaNeural"
+
+; ===== 启动 edge-tts 生成音频，返回进程 PID；启动失败返回 0 =====
+; 非阻塞：edge-tts 在后台写文件，调用方拿 PID 自行轮询，生成结束后再播放。
+; voice 留空表示按文本自动判断；取词单词朗读会显式传英文语音——
+; 那里查的本来就是英文单词，自动判断会把"中"这类中英同形的输入误判成中文。
+RunEdgeTts(text, outFile, voice := "")
+{
+  if (voice = "")
+    voice := TtsVoiceFor(text)
+  try {
+    Run('edge-tts --voice ' . voice . ' --text "' . EscapeTtsArg(text) . '" --write-media "' . outFile . '"', , "Hide", &outPid)
+    return outPid
+  }
+  return 0
+}
+
 ; 核心朗读函数：支持中英自动识别
 PlayTtsText(text, isRetry := false)
 {
@@ -97,27 +117,19 @@ PlayTtsText(text, isRetry := false)
   g_TtsProcPid := 0
   Sleep(50)
 
-  ; 2. 自动检测语言并选择语音
-  isChinese := RegExMatch(text, "[\x{4e00}-\x{9fff}]")
-  voice := isChinese ? "zh-CN-XiaoxiaoNeural" : "en-US-AriaNeural"
-
-  ; 3. 调用 edge-tts 生成音频
+  ; 2. 调用 edge-tts 生成音频（语言检测与启动都在 RunEdgeTts 里）
   RestorePrevForeground()
-  escapedText := EscapeTtsArg(text)
 
-  try {
-    ; 使用非阻塞启动，并通过定时器轮询检测结束
-    Run('edge-tts --voice ' . voice . ' --text "' . escapedText . '" --write-media "' . tempFile . '"', , "Hide", &outPid)
+  outPid := RunEdgeTts(text, tempFile)
+  if (outPid) {
     g_TtsProcPid := outPid
-    
     g_TtsProcStartTick := A_TickCount
     g_TtsPlayText := text
     g_TtsTempFile := tempFile
-    
+
     SetTimer(PollTtsPlay, 100)
-  } catch Error as e {
-    ; 静默失败
   }
+  ; 启动失败静默忽略：朗读是辅助功能，弹框打断用户不值得
 }
 
 PollTtsPlay()
@@ -260,9 +272,6 @@ PlayTtsLoop(isRetry := false)
   if (text = "" || IsTtsPlaceholder(text))
     return
 
-  isChinese := RegExMatch(text, "[\x{4e00}-\x{9fff}]")
-  voice := isChinese ? "zh-CN-XiaoxiaoNeural" : "en-US-AriaNeural"
-
   try {
     ; 核心优化：如果文字没变且文件存在，则不重新生成 (如果是重试则强制重新生成)
     if (text != lastText || !FileExist(tempFile) || isRetry) {
@@ -277,16 +286,18 @@ PlayTtsLoop(isRetry := false)
         }
         try SoundPlay("NonExistent.zzz")
 
-        escapedText := EscapeTtsArg(text)
+        ; 异步非阻塞生成音频（语言检测在 RunEdgeTts 里）
+        ; 启动失败时不记 lastText、不起定时器：与重构前 Run 抛异常跳过后续语句的行为一致，
+        ; 否则 lastText 会指向一个并不存在的音频文件
+        outPid := RunEdgeTts(text, tempFile)
+        if (outPid) {
+            g_HoverTtsProcPid := outPid
+            lastText := text
 
-        ; 异步非阻塞生成音频
-        Run('edge-tts --voice ' . voice . ' --text "' . escapedText . '" --write-media "' . tempFile . '"', , "Hide", &outPid)
-        g_HoverTtsProcPid := outPid
-        lastText := text
-
-        global g_HoverTtsStartTick
-        g_HoverTtsStartTick := A_TickCount
-        SetTimer(PollHoverTtsPlay, 100)
+            global g_HoverTtsStartTick
+            g_HoverTtsStartTick := A_TickCount
+            SetTimer(PollHoverTtsPlay, 100)
+        }
     } else {
         ; 文件已存在且还是原文本，直接采用非阻塞方式播放一次
         if (g_TtsPlaying && FileExist(tempFile)) {

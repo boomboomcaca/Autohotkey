@@ -818,38 +818,60 @@ EnsureWindowOnScreen(hwnd)
 ; 通过 UIA 定位 Gemini 输入框（窗口底部最靠下的可聚焦编辑框）并点击聚焦。
 ; 坐标来自元素实际位置，RDP 会话下 DPI/分辨率变化时依然命中；
 ; 轮询等待输入框出现，覆盖 RDP 位图远传导致 Chrome 渲染变慢的情况
+; 在 Gemini 窗口里筛出"像输入框"的可聚焦 Edit 元素，按 UIA 枚举顺序返回数组
+; （每项为 {el, loc}），UIA 不可用或一个都没有时返回空数组。
+;
+; 只负责筛选、不做取舍：两个调用方要的不一样——FocusGeminiInput 取最靠下的那个去点击，
+; WaitGeminiInputReady 只要任意一个有文本就算就绪。
+; 筛选条件此前在这两处各抄了一份，其中一份还把"为什么这样筛"的注释弄丢了，
+; 以后 Gemini 改版要调阈值，很容易只改一处。
+GetGeminiInputCandidates(hwnd)
+{
+    out := []
+    try {
+        WinGetPos(&wx, &wy, &ww, &wh, "ahk_id " . hwnd)
+        root := UIA.ElementFromHandle(hwnd)
+        for e in root.FindElements({Type:"Edit"})
+        {
+            try {
+                if (!e.IsKeyboardFocusable || e.IsOffscreen)
+                    continue
+                loc := e.Location
+                if (loc.w < 50 || loc.h < 10)
+                    continue
+                ; 只接受"输入框形状"的候选：高度有限且贴近窗口底部。
+                ; Gemini 的 Canvas/文档面板也是可聚焦 Edit，但接近全窗口高，
+                ; 若误选中它，后面的 ^a/^v 会覆盖用户文档内容
+                if (loc.h > wh * 0.4 || loc.y + loc.h < wy + wh / 2)
+                    continue
+                out.Push({el: e, loc: loc})
+            }
+        }
+    }
+    return out
+}
+
 FocusGeminiInput(hwnd, timeoutMs := 2500)
 {
     deadline := A_TickCount + timeoutMs
     while (A_TickCount < deadline)
     {
-        try {
-            WinGetPos(&wx, &wy, &ww, &wh, "ahk_id " . hwnd)
-            root := UIA.ElementFromHandle(hwnd)
-            best := ""
-            bestLoc := ""
-            bestBottom := -2147483648
-            for e in root.FindElements({Type:"Edit"})
+        ; 取最靠下的候选：Gemini 的输入框永远在窗口底部
+        best := ""
+        bestLoc := ""
+        bestBottom := -2147483648
+        for c in GetGeminiInputCandidates(hwnd)
+        {
+            if (c.loc.y + c.loc.h > bestBottom)
             {
-                try {
-                    if (!e.IsKeyboardFocusable || e.IsOffscreen)
-                        continue
-                    loc := e.Location
-                    if (loc.w < 50 || loc.h < 10)
-                        continue
-                    ; 只接受"输入框形状"的候选：高度有限且贴近窗口底部。
-                    ; Gemini 的 Canvas/文档面板也是可聚焦 Edit，但接近全窗口高，
-                    ; 若误选中它，后面的 ^a/^v 会覆盖用户文档内容
-                    if (loc.h > wh * 0.4 || loc.y + loc.h < wy + wh / 2)
-                        continue
-                    if (loc.y + loc.h > bestBottom)
-                    {
-                        bestBottom := loc.y + loc.h
-                        best := e
-                        bestLoc := loc
-                    }
-                }
+                bestBottom := c.loc.y + c.loc.h
+                best := c.el
+                bestLoc := c.loc
             }
+        }
+        ; 整段包在 try 里：与重构前一致，SetFocus/Click 抛异常时不往外冒，
+        ; 而是落到下面的 Sleep 后重试
+        try {
             if (best)
             {
                 try best.SetFocus()
@@ -873,22 +895,13 @@ WaitGeminiInputReady(hwnd, timeoutMs := 1200)
     deadline := A_TickCount + timeoutMs
     while (A_TickCount < deadline)
     {
-        try {
-            WinGetPos(&wx, &wy, &ww, &wh, "ahk_id " . hwnd)
-            root := UIA.ElementFromHandle(hwnd)
-            for e in root.FindElements({Type:"Edit"})
-            {
-                try {
-                    if (!e.IsKeyboardFocusable || e.IsOffscreen)
-                        continue
-                    loc := e.Location
-                    if (loc.w < 50 || loc.h < 10)
-                        continue
-                    if (loc.h > wh * 0.4 || loc.y + loc.h < wy + wh / 2)
-                        continue
-                    if (Trim(e.Value) != "")
-                        return true
-                }
+        ; 任意一个候选有文本即认为就绪（不像 FocusGeminiInput 那样只认最靠下的），
+        ; 与重构前逐个元素判断的行为一致
+        for c in GetGeminiInputCandidates(hwnd)
+        {
+            try {
+                if (Trim(c.el.Value) != "")
+                    return true
             }
         }
         Sleep(60)

@@ -708,8 +708,7 @@ WL_AbortPendingRequest(msg)
   SetTimer(CheckWordResult, 0)
   if (g_WL_ResultCtrl != "")
     try g_WL_ResultCtrl.Value := msg
-  try FileDelete(A_Temp . "\ahk_wl_request_word.json")
-  try FileDelete(A_Temp . "\ahk_wl_curl.cfg")
+  CurlCleanupTempFiles("wl")
 }
 
 ; ===== 发起 Ollama 语境解释请求 =====
@@ -766,43 +765,26 @@ StartWordOllamaRequest(word, context, isNavigating := false, isRetry := false)
   ; 转义 JSON
   prompt := EscapeJsonForApi(prompt)
 
-  ; 设置文件
-  g_WL_StreamFile := A_Temp . "\ahk_wl_stream_word.txt"
-  jsonFile := A_Temp . "\ahk_wl_request_word.json"
-  curlCfg := A_Temp . "\ahk_wl_curl.cfg"
-
-  try FileDelete(g_WL_StreamFile)
-  try FileDelete(jsonFile)
-  try FileDelete(curlCfg)
+  g_WL_StreamFile := CurlStreamFile("wl")
 
   ; JSON (OpenAI 格式)
-  global g_MistralApiKey, g_MistralModel, g_MistralEndpoint
+  global g_MistralModel
   json := '{"model":"' . g_MistralModel . '","messages":[{"role":"system","content":"' . sysPrompt . '"},{"role":"user","content":"' . prompt . '"}],"temperature":0,"max_tokens":800,"stream":true}'
 
-  try {
-    FileAppend(json, jsonFile, "UTF-8-RAW")
-    ; Authorization 头写入 curl 配置文件而非命令行，避免 API key 暴露在进程命令行中
-    FileAppend('header = "Authorization: Bearer ' . g_MistralApiKey . '"`n', curlCfg, "UTF-8-RAW")
-  } catch {
+  req := StartCurlStream("wl", json, 60)
+  if (!req.pid) {
     ; 上面已把 g_WL_Pending 置 true，而轮询定时器要到函数末尾才启动。
-    ; 直接 return 会让浮窗永远停在"正在查询..."，除了关窗没有任何恢复途径
-    WL_AbortPendingRequest(g_WL_LangMode = "EN" ? "⚠ Failed to write temp file (disk full or locked)." : "⚠ 无法写入临时文件，请检查磁盘空间或杀毒软件拦截。")
+    ; 不复位就会永远卡在"正在查询..."，除了关窗没有任何恢复途径
+    if (req.stage = "tempfile")
+      WL_AbortPendingRequest(g_WL_LangMode = "EN" ? "⚠ Failed to write temp file (disk full or locked)." : "⚠ 无法写入临时文件，请检查磁盘空间或杀毒软件拦截。")
+    else
+      WL_AbortPendingRequest(g_WL_LangMode = "EN" ? "⚠ Failed to launch curl.exe." : "⚠ 无法启动 curl.exe，请确认系统已安装 curl。")
     return
   }
-
-  ; 使用 curl.exe 调用 Mistral API
-  try {
-    curlCmd := 'curl.exe -s -N --connect-timeout 10 -m 60 -X POST "' . g_MistralEndpoint . '" -H "Content-Type: application/json" -K "' . curlCfg . '" -d "@' . jsonFile . '" -o "' . g_WL_StreamFile . '"'
-    Run(curlCmd, , "Hide", &outPid)
-    g_WL_StreamPid := outPid
-    global g_WL_StartTick, g_WL_LastDataTick
-    g_WL_StartTick := A_TickCount
-    g_WL_LastDataTick := A_TickCount
-  } catch {
-    ; 同上：curl.exe 不存在或被拦截时，不复位就会永远卡在"正在查询..."
-    WL_AbortPendingRequest(g_WL_LangMode = "EN" ? "⚠ Failed to launch curl.exe." : "⚠ 无法启动 curl.exe，请确认系统已安装 curl。")
-    return
-  }
+  g_WL_StreamPid := req.pid
+  global g_WL_StartTick, g_WL_LastDataTick
+  g_WL_StartTick := A_TickCount
+  g_WL_LastDataTick := A_TickCount
 
   ; 启动极速轮询(性能优化：增加间隔至 100ms)
   SetTimer(CheckWordResult, 100)
@@ -894,9 +876,7 @@ CheckWordResult()
         g_WL_Pending := false
         g_WL_StreamPid := 0
         SetTimer(CheckWordResult, 0)
-        try FileDelete(g_WL_StreamFile)
-        try FileDelete(A_Temp . "\ahk_wl_request_word.json")
-        try FileDelete(A_Temp . "\ahk_wl_curl.cfg")
+        CurlCleanupTempFiles("wl")
 
         StartWordOllamaRequest(WL_CurrentWord, WL_CurrentContext, false, true)
         return
@@ -920,55 +900,16 @@ CheckWordResult()
     SetTimer(CheckWordResult, 0)
     
     ; 阅后即焚，清理临时文件
-    try FileDelete(g_WL_StreamFile)
-    try FileDelete(A_Temp . "\ahk_wl_request_word.json")
-    try FileDelete(A_Temp . "\ahk_wl_curl.cfg")
+    CurlCleanupTempFiles("wl")
   }
 }
 
 ; ===== 读取流式文件内容 =====
 WL_ReadStreamContent(filePath)
 {
-  if (!FileExist(filePath))
-    return ""
-
-  try {
-    f := FileOpen(filePath, "r", "UTF-8")
-    if (!f)
-      return ""
-    content := f.Read()
-    f.Close()
-  } catch {
-    return ""
-  }
-
-  ; 解析 OpenAI SSE 流式 JSON
-  result := ""
-  Loop Parse, content, "`n", "`r"
-  {
-    line := Trim(A_LoopField)
-    if (line = "")
-      continue
-    
-    ; OpenAI SSE 格式: 每行以 "data: " 开头
-    if (SubStr(line, 1, 6) = "data: ") {
-      line := SubStr(line, 7)
-    }
-    
-    ; 跳过 [DONE] 标记
-    if (line = "[DONE]")
-      continue
-    
-    if (!InStr(line, "{"))
-      continue
-    
-    if RegExMatch(line, '"content"\s*:\s*"((?:[^"\\]|\\.)*)"', &m) {
-      token := UnescapeApiJson(m[1])
-      result .= token
-    }
-  }
-
-  result := Trim(result)
+  ; 读取与 SSE 解析都在 shared/ollama_api.ahk，此处只做本模块特有的后处理。
+  ; 接口错误不在这里处理：调用方解析出空串后会用 ExtractApiError 读原始响应给出提示
+  result := Trim(ParseSseContent(ReadTextFileUtf8(filePath), &ignoredErr))
   result := RegExReplace(result, "(\r?\n\s*){2,}", "`n")
 
   return result ; 性能优化: StripEmoji 移至最终结果时统一调用，避免流式热路径重复执行

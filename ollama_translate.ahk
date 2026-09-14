@@ -557,16 +557,17 @@ UpdateCorrectResult(result)
   }
 }
 
-Gui_Apply(guiObj, *)
+; ===== 停掉所有在途请求、轮询定时器与朗读 =====
+; Gui_Apply 和 Gui_Close 此前各有一份逐行相同的拷贝（约 25 行）。
+; 窗口一旦销毁，这些回调就会去访问已失效的控件、定时器则一直空转，
+; 所以两条收尾路径都必须完整执行一遍，漏一项就是后台泄漏。
+StopAllPendingWork()
 {
-  global g_TranslateResult, g_CorrectResult, g_OldClip, g_SelectedResult
-  global g_MainGui, g_TranslateEditCtrl, g_CorrectEditCtrl, g_OrigEditCtrl
-  global g_CorrectedText, g_IsChineseMode
   global g_HttpCorrect, g_CorrectPending, g_TranslatePending, g_ChatPending
   global g_StreamPidCorrect, g_StreamPidTranslate, g_StreamPidChat
   global g_TtsPlaying, g_HoverTarget
 
-  ; 替换前先停止所有在途请求与轮询定时器，避免销毁窗口后回调访问失效控件 / 定时器泄漏
+  ; XMLHTTP 是异步的，不中止会在后台继续跑完
   if (IsObject(g_HttpCorrect)) {
     try g_HttpCorrect.Abort()
     g_HttpCorrect := ""
@@ -592,6 +593,19 @@ Gui_Apply(guiObj, *)
   SetTimer(CheckChatResult, 0)
   SetTimer(CheckTtsHover, 0)
   try StopTts()
+}
+
+Gui_Apply(guiObj, *)
+{
+  global g_TranslateResult, g_CorrectResult, g_OldClip, g_SelectedResult
+  global g_MainGui, g_TranslateEditCtrl, g_CorrectEditCtrl, g_OrigEditCtrl
+  global g_CorrectedText, g_IsChineseMode
+  global g_HttpCorrect, g_CorrectPending, g_TranslatePending, g_ChatPending
+  global g_StreamPidCorrect, g_StreamPidTranslate, g_StreamPidChat
+  global g_TtsPlaying, g_HoverTarget
+
+  ; 替换前先停止所有在途请求与轮询定时器，避免销毁窗口后回调访问失效控件 / 定时器泄漏
+  StopAllPendingWork()
 
   UnregisterGuiHotkeys(guiObj.Hwnd)
   guiObj.Destroy()
@@ -657,34 +671,9 @@ Gui_Close(guiObj, *)
   global g_StreamPidChat, g_ChatPending, g_QuestionEditCtrl, g_AnswerEditCtrl, g_SendBtnCtrl
   global g_PromptDropdown, g_HttpCorrect
   
-  ; 终止正在运行的 PowerShell 进程
-  if (g_StreamPidCorrect > 0) {
-    try ProcessClose(g_StreamPidCorrect)
-    g_StreamPidCorrect := 0
-  }
-  if (g_StreamPidTranslate > 0) {
-    try ProcessClose(g_StreamPidTranslate)
-    g_StreamPidTranslate := 0
-  }
-  if (g_StreamPidChat > 0) {
-    try ProcessClose(g_StreamPidChat)
-    g_StreamPidChat := 0
-  }
-  g_CorrectPending := false
-  g_TranslatePending := false
-  ; 中止仍在进行的翻译请求（XMLHTTP 是异步的，不中止会在后台继续跑完）
-  if (IsObject(g_HttpCorrect)) {
-    try g_HttpCorrect.Abort()
-    g_HttpCorrect := ""
-  }
-  g_ChatPending := false
-  SetTimer(CheckAsyncResults, 0)
-  SetTimer(CheckChatResult, 0)
-  
-  g_TtsPlaying := false
-  g_HoverTarget := ""
-  SetTimer(CheckTtsHover, 0)
-  try StopTts()
+  ; 终止在途的 curl 子进程、XMLHTTP 请求、轮询定时器与朗读
+  StopAllPendingWork()
+
   UnregisterGuiHotkeys(guiObj.Hwnd)
   guiObj.Destroy()
   g_MainGui := ""
