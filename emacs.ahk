@@ -135,6 +135,12 @@ kill_ring_save()
   global is_pre_spc := ""
   Return
 }
+yank()
+{
+  Send("^v")
+  global is_pre_spc := ""
+  Return
+}
 move_beginning_of_line()
 {
   global
@@ -396,6 +402,21 @@ global ; V1toV2: Made function global
     kill_ring_save()
 Return
 } ; V1toV2: Added closing brace for [!w]
+; Ctrl+Y = Emacs 的 yank（粘贴），补齐 kill / kill-ring-save / yank 这一组。
+; 代价：Windows 上 Ctrl+Y 普遍是【重做】，绑了之后全局失去它
+; （Office、资源管理器、多数编辑器；重做还可用 Ctrl+Shift+Z，但并非处处支持）。
+; 上游当初留了 yank() 函数却没接热键，多半就是不想付这个代价——
+; 毕竟原生 Ctrl+V 一直没被动过，粘贴本来就能用。这里是明知代价后的选择。
+; is_target() 列出的应用照例原样透传。
+^y::
+{
+global
+  If is_target()
+    Send(A_ThisHotkey)
+  Else
+    yank()
+Return
+}
 
 $^Space::
 { ; V1toV2: Added opening brace for [$^Space]
