@@ -707,19 +707,66 @@ InvokeGeminiToolbarButton(chromeHwnd, wantClose := false)
 }
 
 ; 点面板里的"弹出成独立窗口"按钮。点到了返回 true。
-; 只对老版 Chrome 有意义——新版点完工具栏按钮就直接出独立窗口了，根本没有这个按钮
-; （2026-09-14 实测：点完之后把主窗口里所有按钮全列出来，没有任何一个带 Pop）。
-; 留着是为了兼容还没更新的 Chrome；找不到就当作不需要，不能因此判定失败。
+;
+; Chrome 改版记录：
+; 1) 老版 Chrome：面板顶部直接有一个 "Pop-out chat" 或 "Pop-out" 独立按钮。
+; 2) 新版 Chrome：Google 将 "Pop-out chat" 收进了侧边栏右上角的 "More options"（更多选项）
+;    菜单中。因此必须先触发 "More options" 按钮打开下拉菜单，再在弹出的菜单中
+;    点击 "Pop-out chat"（MenuItem）项。
 InvokeGeminiPopOutButton(chromeHwnd)
 {
     try {
-        for el in UIA.ElementFromHandle(chromeHwnd).FindAll({Type: "Button"})
+        root := UIA.ElementFromHandle(chromeHwnd)
+        WinGetPos(&wx, &wy, &ww, &wh, "ahk_id " . chromeHwnd)
+
+        ; 1) 老版 Chrome：面板上直接有 Pop-out 按钮
+        for el in root.FindAll({Type: "Button"})
         {
             try {
                 nm := el.Name
-                if (nm != "" && (InStr(nm, "Pop-out") || InStr(nm, "Pop out"))) {
+                if (nm != "" && (InStr(nm, "Pop-out") || InStr(nm, "Pop out") || InStr(nm, "弹出"))) {
                     el.Invoke()
                     return true
+                }
+            }
+        }
+
+        ; 2) 新版 Chrome：在侧边栏右上角的 "More options" 下拉菜单里
+        moreBtn := 0
+        for b in root.FindAll({Type: "Button"})
+        {
+            try {
+                pos := b.GetPos("screen")
+                rely := pos.y - wy
+                ; 位于侧边栏顶部区域（y 在 150~400，x 靠右侧）
+                if (rely >= 150 && rely <= 400 && pos.x >= wx + ww - 1000) {
+                    if (b.Name = "More options" || InStr(b.Name, "options") || InStr(b.Name, "选项")) {
+                        moreBtn := b
+                        break
+                    }
+                }
+            }
+        }
+
+        if (moreBtn)
+        {
+            moreBtn.Invoke()
+            Sleep(300)
+
+            for h in WinGetList("ahk_class Chrome_WidgetWin_1 ahk_exe chrome.exe")
+            {
+                try {
+                    r := UIA.ElementFromHandle(h)
+                    for el in r.FindAll()
+                    {
+                        try {
+                            nm := el.Name
+                            if (nm != "" && (InStr(nm, "Pop-out") || InStr(nm, "Pop out") || InStr(nm, "弹出"))) {
+                                el.Invoke()
+                                return true
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -785,10 +832,11 @@ OpenGeminiWindow()
     if (!InvokeGeminiToolbarButton(chromeHwnd, false))
         why := "标签栏上找不到 Gemini 按钮"
 
-    ; 2) 等独立窗口出现。新版 Chrome 点完直接出（约 2~3 秒）；
-    ;    老版要先在面板里点"弹出"，所以每隔 1 秒顺手试一次，试不到也不算失败。
+    ; 2) 等侧边栏展开并弹出独立窗口。
+    ;    老版 Chrome 在面板里直接有 Pop-out；新版 Chrome 将 Pop-out chat 收进了 More options 菜单。
+    ;    边轮询等窗口，边尝试通过 InvokeGeminiPopOutButton 触发弹出。
     deadline := A_TickCount + 12000
-    nextPop := A_TickCount + 1000
+    nextPop := A_TickCount + 600
     while (A_TickCount < deadline)
     {
         hwnd := GetGeminiWindow()
@@ -797,9 +845,9 @@ OpenGeminiWindow()
         if (A_TickCount >= nextPop)
         {
             InvokeGeminiPopOutButton(chromeHwnd)
-            nextPop := A_TickCount + 1000
+            nextPop := A_TickCount + 700
         }
-        Sleep(150)
+        Sleep(100)
     }
     if (why = "")
         why := "按钮点到了，但 12 秒内没出现独立窗口"
