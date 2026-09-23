@@ -511,11 +511,10 @@ global ; V1toV2: Made function global
 return
 } ; V1toV2: Added closing brace for [!>]
 
-XButton1::Send("!{Left}")  ; 后退键（靠后那个）-> Alt+Left，即浏览器后退
-; 前进键（靠前那个）-> 直接调用 Gemini 窗口开关，与 F2 同一份代码
-; 不用 Send("{F2}")：AHK 默认忽略脚本自己发出的按键，那样触发不了本脚本的 F2 热键
-; 2026-09-14 改（原为 Alt+Right 浏览器前进）
-XButton2::GeminiToggle()
+XButton1::Send("!{Left}")   ; 后退键（靠后那个）-> Alt+Left，即浏览器后退
+XButton2::Send("!{Right}")  ; 前进键（靠前那个）-> Alt+Right，即浏览器前进
+; 注：2026-09-14 曾把前进键改成 Gemini 窗口开关（XButton2::GeminiToggle()），
+;     用着不顺手，同月 19 日改回浏览器前进。Gemini 开关仍在 F2 上。
 #Space::Send("{Ctrl down}{Space}{Ctrl up}")
 
 

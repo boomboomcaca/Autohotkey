@@ -80,6 +80,24 @@ OnMessage(0x007B, WL_WM_CONTEXTMENU)
 OnMessage(0x0204, WL_WM_RBUTTON) ; WM_RBUTTONDOWN
 OnMessage(0x0205, WL_WM_RBUTTON) ; WM_RBUTTONUP
 
+; ===== 取词调试日志 =====
+; 排查"句子取错"用：开关在 ollama_config.ini 的 [Settings] DebugWordLookup=1，
+; 默认关闭。打开后每按一次 F2 就往 word_lookup_debug.log 追加一行，
+; 记下这次取词走的是哪条分支 —— UIA 的 TextPattern、UIA 的 Name，还是 OCR。
+; 光靠看结果猜分支已经猜错过一次，所以宁可留这一行。
+global WL_DebugOn := -1
+WL_Debug(msg)
+{
+    global WL_DebugOn
+    if (WL_DebugOn = -1) {
+        WL_DebugOn := 0
+        try WL_DebugOn := (IniRead(A_ScriptDir . "\ollama_config.ini", "Settings", "DebugWordLookup", "0") = "1") ? 1 : 0
+    }
+    if (!WL_DebugOn)
+        return
+    try FileAppend(FormatTime(, "yyyy-MM-dd HH:mm:ss") . "  " . msg . "`n", A_ScriptDir . "\word_lookup_debug.log", "UTF-8")
+}
+
 GetWordAndLineAtMouse(&word, &line)
 {
   CoordMode("Mouse", "Screen")
@@ -89,6 +107,12 @@ GetWordAndLineAtMouse(&word, &line)
   line := ""
   found := false
   fromOcr := false
+  ; UIA 读到的、光标所在元素的完整文字。按钮/标签类元素的 Name 常常是词组
+  ; (如 "Caught My Coach")，下面取词那步会因为含空格而整条弃用，
+  ; 但它恰恰是最准确的上下文来源，所以单独留一份给 OCR 分支当 line 用。
+  uiaContext := ""
+  srcTag := "none"      ; 本次取词最终由哪条分支产出，只给日志用
+  uiaRect := 0          ; uiaContext 所属元素的屏幕矩形
 
   ; ==========================================================
   ; 【优先级 1】: UIA (UI Automation) - 内存直读，0延迟，100% 准确
@@ -152,6 +176,7 @@ GetWordAndLineAtMouse(&word, &line)
               word := cleanedWord
               line := rawLine
               found := true
+              srcTag := "uia-text"
             }
           }
         }
@@ -173,12 +198,23 @@ GetWordAndLineAtMouse(&word, &line)
         genericLabels := "Logo|Icon|Image|Picture|Graphic|Illustration|Avatar|Banner|SVG|Brand"
         isGenericLabel := (InStr(rawName, "获取缺失的图片说明") || InStr(rawName, "missing image descriptions") || RegExMatch(rawName, "i)^(" . genericLabels . ")$"))
         
+        ; 含空格的 Name 不能当单词用，但可以当上下文留下来。
+        ; 2026-09-19：在标签墙式的页面上按 F2，句子会变成
+        ; "Naughty Arne n Network ns ..." 这种碎片拼接 —— 根源就是这里把整条 Name
+        ; 丢掉后只能靠 OCR 硬拼上下各 3 行，而那些"行"是一排排互不相干的按钮。
+        if (isTextElement && !isGenericLabel && rawName != "" && StrLen(rawName) <= 200) {
+          uiaContext := RegExReplace(rawName, "s)[\r\n]+", " ")
+          ; 顺手记下元素矩形：OCR 认不出词时，靠鼠标在矩形里的水平位置从标签文字切词
+          try uiaRect := el.BoundingRectangle
+        }
+
         if (isTextElement && !isGenericLabel && rawName != "" && !RegExMatch(rawName, "\s") && StrLen(rawName) < 50) {
           cleanedWord := RegExReplace(rawName, "^[^\w\x{4e00}-\x{9fa5}\-]+|[^\w\x{4e00}-\x{9fa5}\-]+$", "")
           if (cleanedWord != "") {
             word := cleanedWord
             line := rawName
             found := true
+            srcTag := "uia-name"
           }
         }
       }
@@ -256,7 +292,17 @@ GetWordAndLineAtMouse(&word, &line)
 
         ; 收集上下文行 (向上最多取3行，向下最多取3行，增加范围)
         bestLine := ""
-        if (bestWord != "" && IsSet(bestLineIndex)) {
+        ; 优先采信 UIA 给出的元素完整文字：内存直读，既不会被截取窗口切掉半个词，
+        ; 也不会跨到旁边不相干的元素上。只在它确实包含命中词时才用，否则照旧拼行。
+        ; 注意这里的 bestWord 还是 OCR 的原始 token（合并相邻结块在后面），
+        ; 正好适合拿去和 UIA 原文做包含判断。
+        if (bestWord != "" && uiaContext != "" && InStr(uiaContext, bestWord)) {
+          bestLine := uiaContext
+          srcTag := "ocr+uiactx"
+        }
+        else if (bestWord != "" && IsSet(bestLineIndex)) {
+          srcTag := "ocr-lines"
+
           startLineIdx := Max(1, bestLineIndex - 3)
           endLineIdx := Min(ocrResult.Lines.Length, bestLineIndex + 3)
           for i, lObj in ocrResult.Lines {
@@ -313,6 +359,47 @@ GetWordAndLineAtMouse(&word, &line)
       return false
     }
   }
+
+  ; ==========================================================
+  ; 【优先级 3】: UIA 标签文字按位置切词
+  ; ==========================================================
+  ; 2026-09-19 实测：深色主题的标签墙上按 F2，UIA 明明读到了 "Nubiles Porn"，
+  ; 却因为含空格被上面取词那一关挡掉；OCR 又认不出深色底上的彩色小字，
+  ; 于是两边都空、函数返回 false —— 表现成"按了 F2 毫无反应，面板还是上次的结果"。
+  ; 这里兜底：把标签文字按空白切成 token，用鼠标在元素矩形里的水平比例挑一个。
+  ; 只对单行短标签生效，所以限定长度和 token 数。
+  if (!found && uiaContext != "" && StrLen(uiaContext) <= 60) {
+    toks := []
+    for pt in StrSplit(Trim(uiaContext), " ", " `t") {
+      t2 := RegExReplace(pt, "^[^\w\x{4e00}-\x{9fa5}\-]+|[^\w\x{4e00}-\x{9fa5}\-]+$", "")
+      if (t2 != "")
+        toks.Push(t2)
+    }
+    if (toks.Length >= 1 && toks.Length <= 8) {
+      pick := 1
+      if (toks.Length > 1 && IsObject(uiaRect)) {
+        try {
+          wRect := uiaRect.r - uiaRect.l
+          if (wRect > 0) {
+            pick := Integer(Floor((mouseX - uiaRect.l) / wRect * toks.Length)) + 1
+            if (pick < 1)
+              pick := 1
+            if (pick > toks.Length)
+              pick := toks.Length
+          }
+        }
+      }
+      word := toks[pick]
+      line := uiaContext
+      found := true
+      srcTag := "uia-split"
+    }
+  }
+
+  WL_Debug(Format("src={1} mouse=({2},{3}) uiaCtx={4} word=[{5}] line=[{6}]",
+                  srcTag, mouseX, mouseY,
+                  (uiaContext = "" ? "-" : SubStr(uiaContext, 1, 60)),
+                  word, SubStr(line, 1, 150)))
 
   if (found && word != "") {
     ; 字符混淆修正只针对 OCR 结果：UIA 是内存直读，文本本身就是准确的，
