@@ -987,7 +987,10 @@ GeminiToggle()
     {
         ; 如果没找到空标题的，也可以尝试找找名字里带 Gemini 的
         if WinExist("Gemini ahk_exe chrome.exe")
+        {
             GeminiHwnd := WinGetID("Gemini ahk_exe chrome.exe")
+            GeminiAutoHwnd := GeminiHwnd
+        }
         else
         {
             ; 未检测到 Gemini 窗口：先抓词，再自动打开（Chrome 没启动时会一并拉起）。
@@ -997,8 +1000,13 @@ GeminiToggle()
             GeminiHwnd := OpenGeminiWindow()
             if (!GeminiHwnd)
                 return
+            GeminiAutoHwnd := GeminiHwnd
             justOpened := true
         }
+    }
+    else
+    {
+        GeminiAutoHwnd := GeminiHwnd
     }
 
     ; 判断窗口是否可见（WS_VISIBLE = 0x10000000）

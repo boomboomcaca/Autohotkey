@@ -184,7 +184,7 @@ CloseWordGui()
   }
 }
 
-; ===== 预生成 TTS 音频（后台） =====
+; ===== 预生成 TTS 音频（后台优先下载有道真人原声） =====
 WL_PregenTts(word)
 {
   global g_WL_TtsFile, g_WL_TtsPid, g_WL_TtsWord, g_WL_TtsGenTick
@@ -200,23 +200,24 @@ WL_PregenTts(word)
     return
 
   g_WL_TtsWord := text
-  ; 换用新文件名之前删除上一个音频文件（正在播放中删不掉的会静默跳过，退出时统一清理）。
-  ; 原先的 prevTtsFile 判断在每次调用时都恰好等于 g_WL_TtsFile，一个文件也删不掉，TEMP 里不断堆积
   oldFile := g_WL_TtsFile
   g_WL_TtsFile := A_Temp . "\ahk_wl_tts_" . A_TickCount . ".mp3"
   if (oldFile != "" && oldFile != g_WL_TtsFile)
     try FileDelete(oldFile)
 
-  ; 显式指定英文语音：取词查的本来就是英文单词，
-  ; 交给 RunEdgeTts 自动判断会把"中"这类中英同形的输入误判成中文
-  outPid := RunEdgeTts(text, g_WL_TtsFile, "en-US-AriaNeural")
+  ; 读取发音类型（0=美音，1=英音）
+  voiceType := 0
+  try voiceType := Integer(IniRead(A_ScriptDir . "\ollama_config.ini", "Settings", "WordVoiceType", "0"))
+
+  ; 优先启动有道真人母语者原声录音下载（极速、免翻墙、100% 真人发音）
+  outPid := RunYoudaoWordAudio(text, g_WL_TtsFile, voiceType)
   if (outPid) {
     g_WL_TtsPid := outPid
-    g_WL_TtsGenTick := A_TickCount  ; 启动失败就不刷新，保持重构前的行为
+    g_WL_TtsGenTick := A_TickCount
   }
 }
 
-; ===== 强制单次朗读（右键触发） =====
+; ===== 强制单次朗读单词（右键触发真人发音） =====
 WL_PlayTtsOnce()
 {
   global WL_CurrentWord, g_WL_TtsFile, g_WL_TtsPid, g_WL_TtsWord, g_WL_TtsGenTick
@@ -229,24 +230,30 @@ WL_PlayTtsOnce()
     WL_PregenTts(text)
   }
 
-  ; 非阻塞等待 edge-tts（最多 8 秒，超时兜底，避免 edge-tts 卡死导致定时器永久轮询）
+  ; 非阻塞等待下载（最多 3 秒超时）
   if (g_WL_TtsPid > 0 && ProcessExist(g_WL_TtsPid)) {
-    if (A_TickCount - g_WL_TtsGenTick < 8000) {
-      SetTimer(WL_PlayTtsOnce, -100)
+    if (A_TickCount - g_WL_TtsGenTick < 3000) {
+      SetTimer(WL_PlayTtsOnce, -50)
       return
     }
     try ProcessClose(g_WL_TtsPid)
   }
   g_WL_TtsPid := 0
 
+  ; 优先播放有道真人原声（文件大于 500 字节，排除空文件或损坏文件）
   try {
-    if FileExist(g_WL_TtsFile) {
+    if (FileExist(g_WL_TtsFile) && FileGetSize(g_WL_TtsFile) > 500) {
       ; 打断上一次朗读
       try SoundPlay("NonExistent.zzz")
+      StopLocalSapi()
       SoundPlay(g_WL_TtsFile)
+      return
     }
   } catch {
   }
+
+  ; 降级兜底：断网或下载失败时使用 Windows 本地 SAPI 离线朗读
+  PlayLocalSapi(text)
 }
 
 ; ===== 全局右键拦截处理函数（由 Hotkey() 动态注册） =====
@@ -288,60 +295,25 @@ WL_HandleRightClick()
   }
 }
 
-; ===== 朗读完整语境句子 =====
+; ===== 朗读完整语境句子（直接使用本地 SAPI 极速朗读） =====
 WL_PlaySentenceTts(sentence)
 {
-  global g_WL_TtsFile, g_WL_TtsPid, g_WL_TtsWord, g_WL_TtsGenTick
+  global g_WL_TtsPid
   
-  ; 停止上一次预生成或朗读进程
   if (g_WL_TtsPid > 0) {
     try ProcessClose(g_WL_TtsPid)
     g_WL_TtsPid := 0
   }
   try SoundPlay("NonExistent.zzz")
+  StopLocalSapi()
   
   sentence := Trim(sentence)
   if (sentence = "")
     return
     
-  g_WL_TtsWord := "" ; 重置当前单词缓存，防止与常规单字朗读缓存发生冲突
-  
-  ; 同 WL_PregenTts：换名前删掉上一个文件（上面已停止播放，句柄已释放）
-  oldFile := g_WL_TtsFile
-  g_WL_TtsFile := A_Temp . "\ahk_wl_sentence_" . A_TickCount . ".mp3"
-  if (oldFile != "" && oldFile != g_WL_TtsFile)
-    try FileDelete(oldFile)
-  
-  ; 整句朗读按内容自动判断中英（与单词朗读不同，句子里的中文是真中文）
-  outPid := RunEdgeTts(sentence, g_WL_TtsFile)
-  if (outPid) {
-    g_WL_TtsPid := outPid
-    g_WL_TtsGenTick := A_TickCount
-    SetTimer(WL_PlayTtsOnce_Check, -50)  ; 轮询播放
-  }
+  PlayLocalSapi(sentence)
 }
 
-WL_PlayTtsOnce_Check()
-{
-  global g_WL_TtsFile, g_WL_TtsPid, g_WL_TtsGenTick
-
-  if (g_WL_TtsPid > 0 && ProcessExist(g_WL_TtsPid)) {
-    if (A_TickCount - g_WL_TtsGenTick < 8000) {
-      SetTimer(WL_PlayTtsOnce_Check, -100)
-      return
-    }
-    try ProcessClose(g_WL_TtsPid)
-  }
-  g_WL_TtsPid := 0
-  
-  try {
-    if FileExist(g_WL_TtsFile) {
-      try SoundPlay("NonExistent.zzz")
-      SoundPlay(g_WL_TtsFile)
-    }
-  } catch {
-  }
-}
 
 ; ===== 历史记录导航 =====
 WL_NavHistory(dir)
@@ -607,26 +579,23 @@ WL_CheckAnkiStatus(word) {
 }
 
 ; ===== 退出清理 =====
-; 终止本脚本仍在运行的子进程（edge-tts / curl），删除临时文件（含写有 API key 的 curl 配置文件）。
-; 不清理的话音频/流式文件会留在 TEMP 里，子进程也会在脚本退出后继续跑
+; 终止本脚本仍在运行的子进程（curl），删除临时文件（含写有 API key 的 curl 配置文件）。
 WL_CleanupOnExit(*)
 {
-  global g_WL_TtsPid, g_WL_StreamPid, g_StreamPidChat, g_TtsProcPid, g_HoverTtsProcPid
+  global g_WL_TtsPid, g_WL_StreamPid, g_StreamPidChat, g_TtsProcPid
   try SoundPlay("NonExistent.zzz")
-  for pid in [g_WL_TtsPid, g_WL_StreamPid, g_StreamPidChat, g_TtsProcPid, g_HoverTtsProcPid] {
-    ; PID 可能已被系统回收给别的程序，只终止确认是我们启动的 edge-tts / curl
+  for pid in [g_WL_TtsPid, g_WL_StreamPid, g_StreamPidChat, g_TtsProcPid] {
     try {
       if (pid > 0 && ProcessExist(pid)) {
         name := ProcessGetName(pid)
-        if (name = "edge-tts.exe" || name = "curl.exe")
+        if (name = "curl.exe")
           ProcessClose(pid)
       }
     }
   }
   CurlCleanupTempFiles("wl")
   CurlCleanupTempFiles("chat")
-  ; 重构前 word_lookup 的两个临时文件叫 *_word.*，这里清掉老版本留下的残留，清完不会再生成
-  for name in ["ahk_wl_tts_*.mp3", "ahk_wl_sentence_*.mp3", "ahk_tts_edge.mp3", "ahk_tts_hover.mp3", "ahk_wl_stream_word.txt", "ahk_wl_request_word.json"]
+  for name in ["ahk_wl_tts_*.mp3", "ahk_tts_youdao.mp3", "ahk_wl_stream_word.txt", "ahk_wl_request_word.json"]
     try FileDelete(A_Temp . "\" . name)
 }
 OnExit(WL_CleanupOnExit)

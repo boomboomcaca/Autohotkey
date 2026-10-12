@@ -1,55 +1,102 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-; TTS 朗读相关函数 (Edge TTS 版)
+; TTS 朗读相关函数 (有道真人原声 + 本地 SAPI 版)
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-global g_TtsProcPid := 0  ; 点击朗读(PlayTtsText/PollTtsPlay)的 edge-tts 进程
-global g_TtsProcStartTick := 0
-global g_TtsPlayText := ""
-global g_TtsTempFile := ""
-global g_HoverTtsStartTick := 0
-global g_HoverTtsProcPid := 0  ; 悬停朗读(PlayTtsLoop/PollHoverTtsPlay)独立的 edge-tts 进程，避免与点击朗读互相覆盖
-global g_HoverTtsTempFile := A_Temp . "\ahk_tts_hover.mp3"  ; 悬停朗读音频文件（PlayTtsLoop/PollHoverTtsPlay/StopTts 共用）
+global g_TtsProcPid := 0        ; 有道发音 curl 下载进程 PID
+global g_TtsProcStartTick := 0  ; 下载开始时间戳
+global g_TtsPlayText := ""       ; 当前正在请求朗读的文本
+global g_TtsTempFile := A_Temp . "\ahk_tts_youdao.mp3"  ; 有道临时音频文件
+global g_LastHoverText := ""    ; 悬停朗读防重复文本
+
+; ===== 本地 SAPI 离线朗读（支持中英文自动适配，零延迟、免联网、永不 403） =====
+PlayLocalSapi(text)
+{
+  text := Trim(text)
+  if (text = "" || IsTtsPlaceholder(text))
+    return
+
+  static spVoice := ""
+  try {
+    if (!spVoice)
+      spVoice := ComObject("SAPI.SpVoice")
+    
+    ; 根据内容是否含中文字符智能切换英文 (Zira) 或中文 (Huihui) 语音包
+    targetName := RegExMatch(text, "[\x{4e00}-\x{9fff}]") ? "Huihui" : "Zira"
+    try {
+      for voice in spVoice.GetVoices() {
+        if InStr(voice.GetDescription(), targetName) {
+          spVoice.Voice := voice
+          break
+        }
+      }
+    }
+    ; 1 (SVSFlagsAsync) | 2 (SVSFPurgeBeforeSpeak) = 3，打断前次朗读并异步播放
+    spVoice.Speak(text, 3)
+  } catch {
+  }
+}
+
+StopLocalSapi()
+{
+  try {
+    static spVoice := ""
+    if (!spVoice)
+      spVoice := ComObject("SAPI.SpVoice")
+    spVoice.Speak("", 2) ; 2 = SVSFPurgeBeforeSpeak 清空未说出的缓冲区
+  } catch {
+  }
+}
 
 Gui_PlayOriginal(*)
 {
-  global g_OrigEditCtrl, g_IsChineseMode
-  text := Trim(g_OrigEditCtrl.Value)
-  if (text = "")
-    return
-  
-  ; 英文模式下通常朗读原文，中文模式下也可以朗读（Edge TTS 支持良好）
-  PlayTtsText(text)
+  global g_OrigEditCtrl
+  try {
+    text := Trim(g_OrigEditCtrl.Value)
+    if (text != "")
+      PlayTtsText(text)
+  }
 }
 
 Gui_PlayCorrect(*)
 {
   global g_CorrectEditCtrl
-  PlayTtsText(g_CorrectEditCtrl.Value)
+  try {
+    text := Trim(g_CorrectEditCtrl.Value)
+    if (text != "")
+      PlayTtsText(text)
+  }
 }
 
 Gui_PlayTranslate(*)
 {
   global g_TranslateEditCtrl
-  PlayTtsText(g_TranslateEditCtrl.Value)
+  try {
+    text := Trim(g_TranslateEditCtrl.Value)
+    if (text != "")
+      PlayTtsText(text)
+  }
 }
 
 Gui_PlayQuestion(*)
 {
   global g_QuestionEditCtrl
-  PlayTtsText(g_QuestionEditCtrl.Value)
+  try {
+    text := Trim(g_QuestionEditCtrl.Value)
+    if (text != "")
+      PlayTtsText(text)
+  }
 }
 
 RestorePrevForeground()
 {
-  global g_PrevForegroundHwnd, g_MainGui
+  global g_PrevForegroundHwnd
   try {
     if (g_PrevForegroundHwnd && WinExist("ahk_id " . g_PrevForegroundHwnd))
       WinActivate("ahk_id " . g_PrevForegroundHwnd)
   }
 }
 
-; 判断文本是否为界面占位提示（不应朗读）。
-; 必须精确/锚定匹配：用 InStr(text, "正在") 会误伤含"正在"的正常句子（如"我正在学习"）
+; 判断文本是否为界面占位提示（不应朗读）
 IsTtsPlaceholder(text)
 {
   static placeholders := Map(
@@ -58,128 +105,142 @@ IsTtsPlaceholder(text)
     "正在切换语言并重新查询...", 1,
     "Querying...", 1, "⏳ Querying...", 1,
     "Switching language and re-querying...", 1)
-  ; 以状态图标或"请求失败/错误:"开头的都是界面提示文字，不朗读
   return placeholders.Has(text) || RegExMatch(text, "^(⏳|⏱|⚠|请求失败|错误[:：])")
 }
 
-; 将文本安全地作为 edge-tts 的命令行参数：
-; 反斜杠换为空格（末尾的 \ 会与闭合引号结合破坏参数边界，且朗读反斜杠无意义）、
-; 换行压成空格、引号转义
-EscapeTtsArg(text)
+; ===== 判断是否适合有道词典真人发音（纯英文字符、短词/短语，不超过 4 个词） =====
+IsYoudaoEligible(text)
 {
-  text := StrReplace(text, "\", " ")
-  text := StrReplace(text, "`r", "")
-  text := StrReplace(text, "`n", " ")
-  return StrReplace(text, '"', '\"')
+  t := Trim(text)
+  if (t = "" || InStr(t, "`n") || InStr(t, "`r"))
+    return false
+  ; 包含汉字则走中文 SAPI，不走有道英文原声
+  if RegExMatch(t, "[\x{4e00}-\x{9fff}]")
+    return false
+  ; 词数检查（按空格分割，不超过 4 个词，长度 <= 40）
+  words := StrSplit(RegExReplace(t, "\s+", " "), " ")
+  return (words.Length <= 4 && StrLen(t) <= 40)
 }
 
-; ===== 按文本内容挑选朗读语音 =====
-; 含汉字用中文女声，否则用英文女声。
-; 这两行此前在三处各抄了一遍（点击朗读、悬停朗读、取词整句朗读），换语音要改三个地方
-TtsVoiceFor(text) => RegExMatch(text, "[\x{4e00}-\x{9fff}]") ? "zh-CN-XiaoxiaoNeural" : "en-US-AriaNeural"
-
-; ===== 启动 edge-tts 生成音频，返回进程 PID；启动失败返回 0 =====
-; 非阻塞：edge-tts 在后台写文件，调用方拿 PID 自行轮询，生成结束后再播放。
-; voice 留空表示按文本自动判断；取词单词朗读会显式传英文语音——
-; 那里查的本来就是英文单词，自动判断会把"中"这类中英同形的输入误判成中文。
-RunEdgeTts(text, outFile, voice := "")
+; ===== 启动有道词典真人发音下载（后台异步），返回进程 PID；失败返回 0 =====
+; voiceType: 0 = 美音（默认），1 = 英音
+RunYoudaoWordAudio(word, outFile, voiceType := 0)
 {
-  if (voice = "")
-    voice := TtsVoiceFor(text)
+  text := Trim(word)
+  if (text = "")
+    return 0
+
+  ; 过滤非字母/连字符字符
+  cleanWord := RegExReplace(text, "[^a-zA-Z\s'-]", "")
+  if (cleanWord = "")
+    cleanWord := text
+
   try {
-    Run('edge-tts --voice ' . voice . ' --text "' . EscapeTtsArg(text) . '" --write-media "' . outFile . '"', , "Hide", &outPid)
+    ; 使用系统自带 curl 快速下载真人原声 MP3（最大超时 3 秒）
+    cmd := 'curl -s -L --max-time 3 "https://dict.youdao.com/dictvoice?audio=' . cleanWord . '&type=' . voiceType . '" -o "' . outFile . '"'
+    Run(cmd, , "Hide", &outPid)
     return outPid
   }
   return 0
 }
 
-; 核心朗读函数：支持中英自动识别
-PlayTtsText(text, isRetry := false)
+; ===== 核心朗读入口：单词/短语走有道真人原声，长句/中文走本地 SAPI =====
+PlayTtsText(text)
 {
-  ; 这三个必须声明 global：PollTtsPlay 读取它们做超时/播放判断；
-  ; 漏声明会写入局部，全局停留在 0/""，导致点击朗读 100ms 即“超时”、永不播放。
-  global g_TtsProcPid, g_TtsRetryCount, g_TtsProcStartTick, g_TtsPlayText, g_TtsTempFile
-  static tempFile := A_Temp . "\ahk_tts_edge.mp3"
-  
-  if (!isRetry)
-    g_TtsRetryCount := 0
+  global g_TtsProcPid, g_TtsProcStartTick, g_TtsPlayText, g_TtsTempFile
   
   text := Trim(text)
   if (text = "" || IsTtsPlaceholder(text))
     return
 
-  ; 1. 停止之前的播放和生成任务
-  try {
-    if (g_TtsProcPid > 0)
-      ProcessClose(g_TtsProcPid)
-    SoundPlay("NonExistent.zzz")
-  }
-  g_TtsProcPid := 0
-  Sleep(50)
-
-  ; 2. 调用 edge-tts 生成音频（语言检测与启动都在 RunEdgeTts 里）
+  ; 停止之前的播放与下载
+  StopTts()
+  Sleep(30)
   RestorePrevForeground()
 
-  outPid := RunEdgeTts(text, tempFile)
-  if (outPid) {
-    g_TtsProcPid := outPid
-    g_TtsProcStartTick := A_TickCount
+  ; 单词与短语优先使用有道真人原声
+  if (IsYoudaoEligible(text)) {
+    voiceType := 0
+    try voiceType := Integer(IniRead(A_ScriptDir . "\ollama_config.ini", "Settings", "WordVoiceType", "0"))
+    
     g_TtsPlayText := text
-    g_TtsTempFile := tempFile
-
-    SetTimer(PollTtsPlay, 100)
+    g_TtsProcStartTick := A_TickCount
+    outPid := RunYoudaoWordAudio(text, g_TtsTempFile, voiceType)
+    if (outPid) {
+      g_TtsProcPid := outPid
+      SetTimer(PollYoudaoPlay, 50)
+      return
+    }
   }
-  ; 启动失败静默忽略：朗读是辅助功能，弹框打断用户不值得
+
+  ; 长句、中文或有道未启动，直接使用本地 SAPI 极速朗读
+  PlayLocalSapi(text)
 }
 
-PollTtsPlay()
+; ===== 轮询等待有道音频下载完成并播放 =====
+PollYoudaoPlay()
 {
   global g_TtsProcPid, g_TtsProcStartTick, g_TtsPlayText, g_TtsTempFile
   
   if (g_TtsProcPid <= 0) {
-    SetTimer(PollTtsPlay, 0)
+    SetTimer(PollYoudaoPlay, 0)
     return
   }
-  
-  ; 超时保护 (10秒)，超时自动重试一次
-  if (A_TickCount - g_TtsProcStartTick > 10000) {
+
+  ; 超时保护 (2.5 秒)，超时自动降级 SAPI
+  if (A_TickCount - g_TtsProcStartTick > 2500) {
     try ProcessClose(g_TtsProcPid)
     g_TtsProcPid := 0
-    SetTimer(PollTtsPlay, 0)
-    
-    global g_TtsRetryCount, g_TtsPlayText
-    if (g_TtsRetryCount < 1) {
-      g_TtsRetryCount++
-      PlayTtsText(g_TtsPlayText, true)
-    }
+    SetTimer(PollYoudaoPlay, 0)
+    PlayLocalSapi(g_TtsPlayText)
     return
   }
-  
+
   if (!ProcessExist(g_TtsProcPid)) {
-    SetTimer(PollTtsPlay, 0)
+    SetTimer(PollYoudaoPlay, 0)
     g_TtsProcPid := 0
-    if (FileExist(g_TtsTempFile) && !IsTtsPlaceholder(g_TtsPlayText)) {
-      ; edge-tts 网络失败时会留下空/残缺文件，SoundPlay 对其抛异常；定时器线程里必须捕获，否则弹错误框
-      try SoundPlay(g_TtsTempFile) ; 异步非阻塞播放音频
+    if (!IsTtsPlaceholder(g_TtsPlayText)) {
+      if (FileExist(g_TtsTempFile) && FileGetSize(g_TtsTempFile) > 500) {
+        try SoundPlay(g_TtsTempFile)
+      } else {
+        ; 下载失败或文件异常，降级 SAPI
+        PlayLocalSapi(g_TtsPlayText)
+      }
     }
   }
 }
 
+; ===== 停止所有朗读和下载 =====
+StopTts()
+{
+  global g_TtsPlaying, g_HoverTarget, g_TtsProcPid, g_LastHoverText
+  g_TtsPlaying := false
+  g_HoverTarget := ""
+  g_LastHoverText := ""
+  SetTimer(PollYoudaoPlay, 0)
+  try {
+    if (g_TtsProcPid > 0 && ProcessExist(g_TtsProcPid)) {
+      ProcessClose(g_TtsProcPid)
+    }
+    SoundPlay("NonExistent.zzz")
+    StopLocalSapi()
+  }
+  g_TtsProcPid := 0
+}
+
+; ===== 鼠标悬停检测 =====
 CheckTtsHover()
 {
   global g_TtsOrigCtrl, g_TtsCorrectCtrl, g_TtsTranslateCtrl, g_TtsQuestionCtrl
-  global g_MainGui, g_TtsPlaying, g_IsChineseMode, g_HoverTarget, g_QuestionEditCtrl
-  global g_PrevForegroundHwnd
+  global g_MainGui, g_TtsPlaying, g_HoverTarget, g_PrevForegroundHwnd
   static lastHoverCtrl := ""
 
-  ; 安全检查：确保主窗口对象存在且有效
   if (!g_MainGui || !IsObject(g_MainGui)) {
     SetTimer(CheckTtsHover, 0)
     return
   }
 
   try {
-    ; 记录进入弹窗前的窗口句柄，用于朗读后恢复焦点（如果需要）
     fgHwnd := WinActive("A")
     if (fgHwnd && fgHwnd != g_MainGui.Hwnd)
       g_PrevForegroundHwnd := fgHwnd
@@ -188,10 +249,7 @@ CheckTtsHover()
 
   currentHover := ""
   try {
-    ; 获取鼠标下的控件 HWND
     MouseGetPos(&mx, &my, &winUnder, &ctrlUnder, 2)
-    
-    ; 只有当控件变量是有效的 GUI 控件对象时，才允许访问 .Hwnd
     if (ctrlUnder) {
         if (g_TtsOrigCtrl && IsObject(g_TtsOrigCtrl) && ctrlUnder = g_TtsOrigCtrl.Hwnd)
           currentHover := "orig"
@@ -203,13 +261,11 @@ CheckTtsHover()
           currentHover := "question"
     }
   } catch {
-    ; 忽略鼠标位置探测中的偶发错误
   }
 
   if (currentHover != "" && currentHover != lastHoverCtrl) {
     g_TtsPlaying := true
     g_HoverTarget := currentHover
-    ; 异步启动播放循环，避免阻塞检测
     SetTimer(PlayTtsLoop, -10)
   } else if (currentHover = "" && lastHoverCtrl != "") {
     StopTts()
@@ -218,41 +274,17 @@ CheckTtsHover()
   lastHoverCtrl := currentHover
 }
 
-StopTts()
+; ===== 悬停朗读调度 =====
+PlayTtsLoop(*)
 {
-  global g_TtsPlaying, g_HoverTarget, g_HoverTtsProcPid, g_HoverTtsTempFile
-  g_TtsPlaying := false
-  g_HoverTarget := ""
-  SetTimer(PollHoverTtsPlay, 0)
-  try {
-    if (g_HoverTtsProcPid > 0 && ProcessExist(g_HoverTtsProcPid)) {
-      ; 生成被中途终止，落盘的文件是残缺的，必须删掉：
-      ; 否则下次悬停同一文本时 PlayTtsLoop 会因"文本未变且文件存在"直接播放残缺文件而不重新生成
-      ProcessClose(g_HoverTtsProcPid)
-      ProcessWaitClose(g_HoverTtsProcPid, 1)
-      try FileDelete(g_HoverTtsTempFile)
-    }
-    SoundPlay("NonExistent.zzz")
-  }
-  g_HoverTtsProcPid := 0
-}
-
-PlayTtsLoop(isRetry := false)
-{
-  global g_TtsPlaying, g_HoverTarget, g_HoverTtsProcPid, g_HoverTtsRetryCount, g_HoverTtsTempFile
+  global g_TtsPlaying, g_HoverTarget, g_LastHoverText
   global g_OrigEditCtrl, g_CorrectEditCtrl, g_TranslateEditCtrl, g_QuestionEditCtrl
-  static lastText := ""  ; 用于缓存上一次处理的文字
-  tempFile := g_HoverTtsTempFile
-
-  if (!isRetry)
-    g_HoverTtsRetryCount := 0
 
   if (!g_TtsPlaying || g_HoverTarget = "") {
-    lastText := "" ; 清空缓存，下次进入重新生成
+    g_LastHoverText := ""
     return
   }
 
-  ; 读取控件文本必须放进 try：窗口可能已销毁，控件引用失效时 .Value 会抛出未捕获异常
   text := ""
   try {
     if (g_HoverTarget = "orig")
@@ -272,71 +304,8 @@ PlayTtsLoop(isRetry := false)
   if (text = "" || IsTtsPlaceholder(text))
     return
 
-  try {
-    ; 核心优化：如果文字没变且文件存在，则不重新生成 (如果是重试则强制重新生成)
-    if (text != lastText || !FileExist(tempFile) || isRetry) {
-        ; 必须先终止上一个生成进程并停止播放：
-        ; SoundPlay 播放中会锁住 tempFile，不停止则新的 edge-tts 写入失败、之后播的还是旧内容；
-        ; 上一个 edge-tts 未结束则两个进程并发写同一文件
-        if (g_HoverTtsProcPid > 0) {
-            try ProcessClose(g_HoverTtsProcPid)
-            ; 等旧进程真正退出并释放文件句柄，否则新的 edge-tts 可能打不开同名文件而生成失败
-            try ProcessWaitClose(g_HoverTtsProcPid, 1)
-            g_HoverTtsProcPid := 0
-        }
-        try SoundPlay("NonExistent.zzz")
-
-        ; 异步非阻塞生成音频（语言检测在 RunEdgeTts 里）
-        ; 启动失败时不记 lastText、不起定时器：与重构前 Run 抛异常跳过后续语句的行为一致，
-        ; 否则 lastText 会指向一个并不存在的音频文件
-        outPid := RunEdgeTts(text, tempFile)
-        if (outPid) {
-            g_HoverTtsProcPid := outPid
-            lastText := text
-
-            global g_HoverTtsStartTick
-            g_HoverTtsStartTick := A_TickCount
-            SetTimer(PollHoverTtsPlay, 100)
-        }
-    } else {
-        ; 文件已存在且还是原文本，直接采用非阻塞方式播放一次
-        if (g_TtsPlaying && FileExist(tempFile)) {
-            SoundPlay(tempFile)
-        }
-    }
-  } catch {
+  if (text != g_LastHoverText) {
+    g_LastHoverText := text
+    PlayTtsText(text)
   }
 }
-
-PollHoverTtsPlay()
-{
-  global g_HoverTtsProcPid, g_HoverTtsStartTick, g_TtsPlaying, g_HoverTtsTempFile
-  tempFile := g_HoverTtsTempFile
-
-  if (g_HoverTtsProcPid <= 0 || !g_TtsPlaying) {
-    SetTimer(PollHoverTtsPlay, 0)
-    return
-  }
-
-  if (A_TickCount - g_HoverTtsStartTick > 10000) {
-    try ProcessClose(g_HoverTtsProcPid)
-    g_HoverTtsProcPid := 0
-    SetTimer(PollHoverTtsPlay, 0)
-
-    global g_HoverTtsRetryCount
-    if (g_HoverTtsRetryCount < 1) {
-      g_HoverTtsRetryCount++
-      PlayTtsLoop(true)
-    }
-    return
-  }
-
-  if (!ProcessExist(g_HoverTtsProcPid)) {
-    SetTimer(PollHoverTtsPlay, 0)
-    g_HoverTtsProcPid := 0
-    if (g_TtsPlaying && FileExist(tempFile)) {
-      try SoundPlay(tempFile)  ; 同 PollTtsPlay：文件为空/损坏时不能让异常冒泡成错误弹窗
-    }
-  }
-}
-
