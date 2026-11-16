@@ -80,6 +80,66 @@ OnMessage(0x007B, WL_WM_CONTEXTMENU)
 OnMessage(0x0204, WL_WM_RBUTTON) ; WM_RBUTTONDOWN
 OnMessage(0x0205, WL_WM_RBUTTON) ; WM_RBUTTONUP
 
+; ===== OCR 引擎预热与高性能模式 =====
+global g_WL_OcrLang := ""
+try OCR.PerformanceMode := 1
+
+WL_GetOcrLang()
+{
+    global g_WL_OcrLang
+    if (g_WL_OcrLang = "") {
+        g_WL_OcrLang := "en-US"
+        try g_WL_OcrLang := IniRead(A_ScriptDir . "\ollama_config.ini", "Settings", "OcrLanguage", "en-US")
+    }
+    return g_WL_OcrLang
+}
+
+WL_WarmupOcr()
+{
+    try {
+        OCR.LoadLanguage(WL_GetOcrLang())
+    } catch {
+        try OCR.LoadLanguage()
+    }
+}
+SetTimer(WL_WarmupOcr, -400)
+
+; ===== 从 UIA anchorRange 所在段落提取上下文，并按条件拼接紧邻续行 =====
+WL_ExtractUiaParaLine(anchorRange, targetToken, allowNeighborMerge)
+{
+    para := anchorRange.Clone()
+    para.ExpandToEnclosingUnit(UIA.TextUnit.Paragraph)
+    rawLine := WL_CleanUiaBlock(para.GetText(), targetToken)
+
+    if (allowNeighborMerge) {
+        try {
+            p_prev := para.Clone()
+            if (p_prev.Move(UIA.TextUnit.Paragraph, -1) != 0) {
+                p_prev.ExpandToEnclosingUnit(UIA.TextUnit.Paragraph)
+                rawPrev := p_prev.GetText()
+                if (WL_ShouldMergeUiaNeighbor(para, p_prev, rawPrev, rawLine, true)) {
+                    txt_prev := WL_CleanUiaBlock(rawPrev)
+                    if (txt_prev != "")
+                        rawLine := txt_prev . " " . rawLine
+                }
+            }
+        }
+        try {
+            p_next := para.Clone()
+            if (p_next.Move(UIA.TextUnit.Paragraph, 1) != 0) {
+                p_next.ExpandToEnclosingUnit(UIA.TextUnit.Paragraph)
+                rawNext := p_next.GetText()
+                if (WL_ShouldMergeUiaNeighbor(para, p_next, rawNext, rawLine, false)) {
+                    txt_next := WL_CleanUiaBlock(rawNext)
+                    if (txt_next != "")
+                        rawLine := rawLine . " " . txt_next
+                }
+            }
+        }
+    }
+    return rawLine
+}
+
 ; ===== 取词调试日志 =====
 ; 排查"句子取错"用：开关在 ollama_config.ini 的 [Settings] DebugWordLookup=1，
 ; 默认关闭。打开后每按一次 F2 就往 word_lookup_debug.log 追加一行，
@@ -98,10 +158,22 @@ WL_Debug(msg)
     try FileAppend(FormatTime(, "yyyy-MM-dd HH:mm:ss") . "  " . msg . "`n", A_ScriptDir . "\word_lookup_debug.log", "UTF-8")
 }
 
-GetWordAndLineAtMouse(&word, &line)
+GetWordAndLineAtMouse(&word, &line, snapX?, snapY?, snapWin?)
 {
-  CoordMode("Mouse", "Screen")
-  MouseGetPos(&mouseX, &mouseY, &winUnder, &ctlUnder)
+  if (IsSet(snapX) && IsSet(snapY)) {
+    mouseX := snapX
+    mouseY := snapY
+    winUnder := IsSet(snapWin) ? snapWin : 0
+  } else {
+    CoordMode("Mouse", "Screen")
+    MouseGetPos(&mouseX, &mouseY, &winUnder)
+  }
+
+  dpi := 96
+  try dpi := DllCall("GetDpiForWindow", "Ptr", winUnder, "UInt")
+  if (!dpi || dpi < 96)
+    dpi := 96
+  dpiScale := dpi / 96.0
 
   word := ""
   line := ""
@@ -109,7 +181,7 @@ GetWordAndLineAtMouse(&word, &line)
   fromOcr := false
   ; UIA 读到的、光标所在元素的完整文字。按钮/标签类元素的 Name 常常是词组
   ; (如 "Caught My Coach")，下面取词那步会因为含空格而整条弃用，
-  ; 但它恰恰是最准确的上下文来源，所以单独留一份给 OCR 分支当 line 用。
+  ; 但它恰恰是最准确的上下文来源，所以单独留一份给 OCR/穿透分支当上下文或边界校验用。
   uiaContext := ""
   srcTag := "none"      ; 本次取词最终由哪条分支产出，只给日志用
   uiaRect := 0          ; uiaContext 所属元素的屏幕矩形
@@ -120,102 +192,134 @@ GetWordAndLineAtMouse(&word, &line)
   try {
     el := UIA.ElementFromPoint(mouseX, mouseY)
     if (el) {
-      if (el.IsTextPatternAvailable) {
-        textPattern := el.TextPattern
-        range := textPattern.RangeFromPoint(mouseX, mouseY)
-        if (range) {
-          lineRange := range.Clone()
-          range.ExpandToEnclosingUnit(UIA.TextUnit.Word)
-          rawWord := Trim(range.GetText())
-          
-          lineRange.ExpandToEnclosingUnit(UIA.TextUnit.Paragraph)
-          rawLine := RegExReplace(Trim(lineRange.GetText()), "s)[\r\n]+", " ") ; 基础行
+      elType := 0
+      try elType := el.Type
 
-          ; --- 优化：尝试获取 UIA 上下文（增加上下各一行） ---
+      ; 基于 UIA ControlType 判断元素是否为可信文本类型：
+      ; 非文本类型 (Image/Group/Pane/Custom/Button 等) 的 Name 通常是无障碍辅助标签，不是用户看到的真实文字
+      ; Text=50020, Edit=50004, Hyperlink/Link=50005, Document=50030, ListItem=50007, TreeItem=50024, MenuItem=50011, TabItem=50019
+      isTextElement := (elType == 50020 || elType == 50004 || elType == 50005 || elType == 50030 || elType == 50007 || elType == 50024 || elType == 50011 || elType == 50019)
+
+      rawName := ""
+      try rawName := Trim(el.Name)
+      genericLabels := "Logo|Icon|Image|Picture|Graphic|Illustration|Avatar|Banner|SVG|Brand"
+      isGenericLabel := (rawName = "" || InStr(rawName, "获取缺失的图片说明") || InStr(rawName, "missing image descriptions") || RegExMatch(rawName, "i)^(" . genericLabels . ")$"))
+
+      if (isTextElement && !isGenericLabel && StrLen(rawName) <= 400) {
+        uiaContext := WL_GetCleanElementText(el, elType, rawName, dpiScale, &uiaRect)
+      }
+
+      ; 1A: 寻找自身或祖先容器的 TextPattern（支持 Hyperlink/span 等无独立 TextPattern 的元素穿透到 Document）
+      tpHost := 0
+      tpFromSelf := false
+      isElTp := false
+      try isElTp := el.IsTextPatternAvailable
+      if (isElTp) {
+        tpHost := el
+        tpFromSelf := true
+      } else if (elType != 50006) { ; 50006 = Image，图片本身留给 OCR
+        try {
+          anc := el
+          Loop 8 {
+            anc := anc.Parent
+            if (!anc)
+              break
+            ancType := 0
+            try ancType := anc.Type
+            if (ancType == 50032) ; Window
+              break
+            isAncTp := false
+            try isAncTp := anc.IsTextPatternAvailable
+            if (isAncTp) {
+              tpHost := anc
+              tpFromSelf := false
+              break
+            }
+            if (ancType == 50030) ; Document
+              break
+          }
+        }
+      }
+
+      if (tpHost) {
+        allowNeighborMerge := (tpFromSelf && (elType == 50020 || elType == 50030 || elType == 50004))
+        try {
+          textPattern := tpHost.TextPattern
+
+          ; 优先响应用户主动划选的单词/短语（鼠标位于或紧邻选区时生效）
           try {
-              p_prev := lineRange.Clone()
-              if (p_prev.Move(UIA.TextUnit.Paragraph, -1) != 0) {
-                  p_prev.ExpandToEnclosingUnit(UIA.TextUnit.Paragraph)
-                  txt_prev := Trim(p_prev.GetText())
-                  if (txt_prev != "" && txt_prev != rawLine)
-                      rawLine := txt_prev . " " . rawLine
+            selRanges := textPattern.GetSelection()
+            if (IsObject(selRanges) && selRanges.Length >= 1) {
+              selRange := selRanges[1]
+              rawSel := ""
+              try rawSel := selRange.GetText()
+              cleanedSel := WL_CleanPhrase(rawSel)
+              if (cleanedSel != "" && WL_IsRangeNearPoint(selRange, mouseX, mouseY, Round(85 * dpiScale), Round(45 * dpiScale), (tpFromSelf && elType == 50004))) {
+                rawLine := ""
+                try rawLine := WL_ExtractUiaParaLine(selRange, cleanedSel, allowNeighborMerge)
+                word := cleanedSel
+                line := WL_ExtractTargetSentence(rawLine != "" ? rawLine : cleanedSel, cleanedSel)
+                found := true
+                srcTag := "uia-sel"
               }
-                  
-              p_next := lineRange.Clone()
-              if (p_next.Move(UIA.TextUnit.Paragraph, 1) != 0) {
-                  p_next.ExpandToEnclosingUnit(UIA.TextUnit.Paragraph)
-                  txt_next := Trim(p_next.GetText())
-                  if (txt_next != "" && txt_next != rawLine && !InStr(rawLine, txt_next))
-                      rawLine := rawLine . " " . txt_next
-              }
+            }
           }
-          ; ----------------------------------------------
 
-          ; --- 如果段落上下文不足（仅含单词本身），从父元素回溯获取完整文本 ---
-          if (rawLine = rawWord || StrLen(rawLine) <= StrLen(rawWord) + 5) {
-              try {
-                  ancestor := el
-                  Loop 5 {
-                      ancestor := ancestor.Parent
-                      if (!ancestor)
-                          break
-                      ancestorText := ""
-                      try ancestorText := Trim(ancestor.Name)
-                      if (ancestorText != "" && StrLen(ancestorText) > StrLen(rawWord) + 5 && InStr(ancestorText, rawWord)) {
-                          rawLine := RegExReplace(ancestorText, "s)[\r\n]+", " ")
-                          break
+          if (!found) {
+            range := textPattern.RangeFromPoint(mouseX, mouseY)
+            if (range) {
+              wordRange := range.Clone()
+              wordRange.ExpandToEnclosingUnit(UIA.TextUnit.Word)
+
+              if (tpFromSelf && elType != 50030)
+                nearOk := WL_IsRangeNearPoint(wordRange, mouseX, mouseY, Round(28 * dpiScale), Round(18 * dpiScale), true)
+              else
+                nearOk := WL_IsRangeNearPoint(wordRange, mouseX, mouseY, Round(22 * dpiScale), Round(15 * dpiScale), false, uiaRect)
+
+              if (nearOk) {
+                rawWord := WL_ExpandUiaCompoundWord(wordRange)
+                if (rawWord = "")
+                  try rawWord := Trim(wordRange.GetText())
+                if (rawWord != "" && !RegExMatch(rawWord, "\s")) {
+                  cleanedWord := WL_CleanWord(rawWord)
+                  if (cleanedWord != "") {
+                    rawLine := ""
+                    if (uiaContext != "" && elType != 50030 && elType != 50004 && elType != 50020 && (WL_ContainsWord(uiaContext, cleanedWord) || InStr(uiaContext, cleanedWord))) {
+                      rawLine := uiaContext
+                    } else {
+                      rawLine := WL_ExtractUiaParaLine(range, cleanedWord, allowNeighborMerge)
+
+                      ; 逐词渲染场景（仅拿到单词本身）向上聚合局部容器中的同组文本节点
+                      if (StrLen(rawLine) <= StrLen(cleanedWord) + 4) {
+                        containerLine := WL_GetUiaContainerLine(el, cleanedWord, mouseX, mouseY, dpiScale)
+                        if (containerLine != "") {
+                          rawLine := containerLine
+                          srcTag := "uia-container"
+                        }
                       }
-                  }
-              }
-          }
-          ; ----------------------------------------------
+                    }
 
-          if (rawWord != "" && !RegExMatch(rawWord, "\s")) {
-            cleanedWord := RegExReplace(rawWord, "^[^\w\x{4e00}-\x{9fa5}\-]+|[^\w\x{4e00}-\x{9fa5}\-]+$", "")
-            if (cleanedWord != "") {
-              word := cleanedWord
-              line := rawLine
-              found := true
-              srcTag := "uia-text"
+                    word := cleanedWord
+                    line := WL_ExtractTargetSentence(rawLine != "" ? rawLine : cleanedWord, cleanedWord)
+                    found := true
+                    if (srcTag = "none")
+                      srcTag := tpFromSelf ? "uia-text" : "uia-doc-tp"
+                  }
+                }
+              }
             }
           }
         }
       }
-      if (!found && el.Name != "") {
-        rawName := Trim(el.Name)
-        
-        ; [核心修复] 基于 UIA ControlType 判断元素是否为文本类型
-        ; 非文本类型 (Image/Group/Pane/Custom/Button 等) 的 Name 通常是无障碍辅助标签，不是用户看到的真实文字
-        ; 应该跳过，让程序回退到 OCR 识别实际可见内容
-        elType := 0
-        try elType := el.Type
-        
-        ; 定义"可信文本类型"白名单 (只有这些类型的 Name 才可能是用户看到的真实文字)
-        ; Text=50020, Edit=50004, Hyperlink/Link=50005, Document=50030, ListItem=50007, TreeItem=50024, MenuItem=50011, TabItem=50019
-        isTextElement := (elType == 50020 || elType == 50004 || elType == 50005 || elType == 50030 || elType == 50007 || elType == 50024 || elType == 50011 || elType == 50019)
-        
-        ; [安全网] 即使类型匹配，仍保留通用标签黑名单作为二级过滤
-        genericLabels := "Logo|Icon|Image|Picture|Graphic|Illustration|Avatar|Banner|SVG|Brand"
-        isGenericLabel := (InStr(rawName, "获取缺失的图片说明") || InStr(rawName, "missing image descriptions") || RegExMatch(rawName, "i)^(" . genericLabels . ")$"))
-        
-        ; 含空格的 Name 不能当单词用，但可以当上下文留下来。
-        ; 2026-09-19：在标签墙式的页面上按 F2，句子会变成
-        ; "Naughty Arne n Network ns ..." 这种碎片拼接 —— 根源就是这里把整条 Name
-        ; 丢掉后只能靠 OCR 硬拼上下各 3 行，而那些"行"是一排排互不相干的按钮。
-        if (isTextElement && !isGenericLabel && rawName != "" && StrLen(rawName) <= 200) {
-          uiaContext := RegExReplace(rawName, "s)[\r\n]+", " ")
-          ; 顺手记下元素矩形：OCR 认不出词时，靠鼠标在矩形里的水平位置从标签文字切词
-          try uiaRect := el.BoundingRectangle
-        }
 
-        if (isTextElement && !isGenericLabel && rawName != "" && !RegExMatch(rawName, "\s") && StrLen(rawName) < 50) {
-          cleanedWord := RegExReplace(rawName, "^[^\w\x{4e00}-\x{9fa5}\-]+|[^\w\x{4e00}-\x{9fa5}\-]+$", "")
-          if (cleanedWord != "") {
-            word := cleanedWord
-            line := rawName
-            found := true
-            srcTag := "uia-name"
-          }
+      ; 1B: 单一单词元素的 Name 直取
+      if (!found && isTextElement && !isGenericLabel && uiaContext != "" && !RegExMatch(uiaContext, "\s") && StrLen(uiaContext) < 50) {
+        cleanedWord := WL_CleanWord(uiaContext)
+        if (cleanedWord != "") {
+          word := cleanedWord
+          line := uiaContext
+          found := true
+          srcTag := "uia-name"
         }
       }
     }
@@ -227,188 +331,137 @@ GetWordAndLineAtMouse(&word, &line)
   ; ==========================================================
   if (!found) {
     try {
-      ; 按目标窗口 DPI 缩放截取尺寸，保证高缩放屏幕上覆盖等量的文本行数
-      dpi := 96
-      try dpi := DllCall("GetDpiForWindow", "Ptr", winUnder, "UInt")
-      ; GetDpiForWindow 在部分窗口/多屏环境下会返回 0，此时若不兜底，
-      ; captureW/captureH 会算成 0，截出 0×0 空图导致 OCR 永远识别不到
-      if (!dpi || dpi < 96)
-        dpi := 96
-      ; 只截取鼠标周围一小块区域：足够容纳目标词 + 上下各 3 行上下文。
-      ; WinRT OCR 同步执行会阻塞脚本主线程，区域越小识别越快；
-      ; 同时也避免距离兜底吸附到屏幕远处无关的词
-      captureW := Round(800 * dpi / 96)
-      captureH := Round(400 * dpi / 96)
-      winX := mouseX - Round(captureW / 2)
-      winY := mouseY - Round(captureH / 2)
+      ; 宽扁截取区域：横向更宽以防切断长字幕，纵向更窄以减少界面按钮干扰
+      capW := Round(1200 * dpiScale)
+      capH := Round(280 * dpiScale)
+      capX := mouseX - (capW // 2)
+      capY := mouseY - (capH // 2)
 
-      ; OCR 识别语言可通过 ollama_config.ini 的 [Settings] OcrLanguage 配置（如 zh-CN）。
-      ; 默认 en-US；若系统没装对应语言包则自动回退到系统可用语言
-      ocrLang := "en-US"
-      try ocrLang := IniRead(A_ScriptDir . "\ollama_config.ini", "Settings", "OcrLanguage", "en-US")
+      ; 限制在虚拟屏幕与当前鼠标所在窗口范围内，避免抓到旁窗内容
+      vx := SysGet(76), vy := SysGet(77), vw := SysGet(78), vh := SysGet(79)
+      rL := Max(vx, capX)
+      rT := Max(vy, capY)
+      rR := Min(vx + vw, capX + capW)
+      rB := Min(vy + vh, capY + capH)
+
       try {
-        ocrResult := OCR.FromRect(winX, winY, captureW, captureH, {Language: ocrLang})
-      } catch {
-        ocrResult := OCR.FromRect(winX, winY, captureW, captureH)
+        if (winUnder) {
+          WinGetPos(&wx, &wy, &ww, &wh, "ahk_id " . winUnder)
+          if (ww >= 120 && wh >= 80 && mouseX >= wx && mouseX < wx + ww && mouseY >= wy && mouseY < wy + wh) {
+            rL := Max(rL, wx)
+            rT := Max(rT, wy)
+            rR := Min(rR, wx + ww)
+            rB := Min(rB, wy + wh)
+          }
+        }
       }
-      
-      if (ocrResult) {
-        bestDist := 999999
-        bestWord := ""
-        bestLine := ""
-        
-        for lineIndex, ocrLine in ocrResult.Lines {
-          for index, ocrWord in ocrLine.Words {
-            cx := ocrWord.x + ocrWord.w / 2
-            cy := ocrWord.y + ocrWord.h / 2
-            dist := Sqrt((mouseX - cx)**2 + (mouseY - cy)**2)
-            
-            if (mouseX >= ocrWord.x && mouseX <= ocrWord.x + ocrWord.w && mouseY >= ocrWord.y && mouseY <= ocrWord.y + ocrWord.h) {
-              bestWord := ocrWord.Text
-              bestDist := 0
-              bestIndex := index
-              bestLineIndex := lineIndex
-              bestLineObj := ocrLine
-              break
-            }
-            
-            if (dist < bestDist) {
-              bestDist := dist
-              bestWord := ocrWord.Text
-              bestIndex := index
-              bestLineIndex := lineIndex
-              bestLineObj := ocrLine
-            }
-          }
-          if (bestDist == 0)
-            break
-        }
-        
-        ; 距离兜底设上限：鼠标未直接命中词框时，只允许吸附到约一行高范围内的词，
-        ; 鼠标指着空白处时宁可取不到，也不抓取截取区域内远处无关的词
-        maxSnapDist := 40 * dpi / 96
-        if (bestDist > maxSnapDist)
-          bestWord := ""
 
-        ; 收集上下文行 (向上最多取3行，向下最多取3行，增加范围)
-        bestLine := ""
-        ; 优先采信 UIA 给出的元素完整文字：内存直读，既不会被截取窗口切掉半个词，
-        ; 也不会跨到旁边不相干的元素上。只在它确实包含命中词时才用，否则照旧拼行。
-        ; 注意这里的 bestWord 还是 OCR 的原始 token（合并相邻结块在后面），
-        ; 正好适合拿去和 UIA 原文做包含判断。
-        if (bestWord != "" && uiaContext != "" && InStr(uiaContext, bestWord)) {
-          bestLine := uiaContext
-          srcTag := "ocr+uiactx"
-        }
-        else if (bestWord != "" && IsSet(bestLineIndex)) {
-          srcTag := "ocr-lines"
+      capX := rL, capY := rT
+      capW := rR - rL, capH := rB - rT
 
-          startLineIdx := Max(1, bestLineIndex - 3)
-          endLineIdx := Min(ocrResult.Lines.Length, bestLineIndex + 3)
-          for i, lObj in ocrResult.Lines {
-            if (i >= startLineIdx && i <= endLineIdx) {
-              bestLine .= (bestLine=""?"":" ") . lObj.Text
-            }
-          }
+      if (capW >= 80 && capH >= 60) {
+        maxImgDim := 4096
+        try if (OCR.MaxImageDimension > 0)
+          maxImgDim := OCR.MaxImageDimension
+        ; 使用整数倍率（4K 200% 原生像素已足，用 1x；100%~150% 用 2x），避开最近邻 1.5x 锯齿畸变
+        primaryScale := (dpi >= 168) ? 1 : 2
+        if (primaryScale > 1 && Ceil(Max(capW, capH) * primaryScale) > maxImgDim)
+          primaryScale := 1
+
+        ocrLang := WL_GetOcrLang()
+
+        ocrResult := ""
+        try {
+          ocrResult := OCR.FromRect(capX, capY, capW, capH, {lang: ocrLang, scale: primaryScale})
+        } catch {
+          ocrResult := OCR.FromRect(capX, capY, capW, capH, {scale: primaryScale})
         }
-        
-        ; 尝试合并紧邻的单词结块 (譬如 OpenClaw 被 OCR 分拆为了 Open 和 Claw)
-        if (bestWord != "" && IsSet(bestLineObj)) {
-            ; 间距阈值按字高比例计算（约 1/5 字高，至少 3 像素）：
-            ; 固定像素阈值在大字体/高 DPI 下会漏合并，调太大又会把正常空格分隔的词错误拼接
-            mergeGap := Max(3, Round(bestLineObj.Words[bestIndex].h * 0.2))
-            ; 往前合并
-            tempIndex := bestIndex - 1
-            while (tempIndex > 0) {
-                prevWord := bestLineObj.Words[tempIndex]
-                currWord := bestLineObj.Words[tempIndex + 1]
-                if (currWord.x - (prevWord.x + prevWord.w) <= mergeGap) {
-                    bestWord := prevWord.Text . bestWord
-                    tempIndex--
-                } else {
-                    break
-                }
-            }
-            ; 往后合并
-            tempIndex := bestIndex + 1
-            while (tempIndex <= bestLineObj.Words.Length) {
-                nextWord := bestLineObj.Words[tempIndex]
-                currWord := bestLineObj.Words[tempIndex - 1]
-                if (nextWord.x - (currWord.x + currWord.w) <= mergeGap) {
-                    bestWord := bestWord . nextWord.Text
-                    tempIndex++
-                } else {
-                    break
-                }
-            }
+
+        if (ocrResult && WL_PickFromOcrResult(ocrResult, mouseX, mouseY, dpiScale, uiaRect, uiaContext, &word, &line, &srcTag)) {
+          found := true
+          fromOcr := true
         }
-        
-        if (bestWord != "") {
-          bestWord := Trim(bestWord)
-          cleanedWord := RegExReplace(bestWord, "^[^\w\x{4e00}-\x{9fa5}\-]+|[^\w\x{4e00}-\x{9fa5}\-]+$", "")
-          if (cleanedWord != "") {
-            word := cleanedWord
-            line := bestLine
-            found := true
-            fromOcr := true
+
+        ; 深色背景 / 低对比度纹理文字重试：紧凑区域整数 2x + 灰度/反色预处理
+        if (!found) {
+          invW := Round(520 * dpiScale)
+          invH := Round(130 * dpiScale)
+          invL := Max(capX, mouseX - (invW // 2))
+          invT := Max(capY, mouseY - (invH // 2))
+          invR := Min(capX + capW, mouseX + (invW // 2))
+          invB := Min(capY + capH, mouseY + (invH // 2))
+          invW := invR - invL
+          invH := invB - invT
+          if (invW >= 60 && invH >= 40) {
+            retryScale := 2
+            if (Ceil(Max(invW, invH) * retryScale) > maxImgDim)
+              retryScale := 1
+
+            ocrInvResult := ""
+            try {
+              ocrInvResult := OCR.FromRect(invL, invT, invW, invH, {lang: ocrLang, scale: retryScale, grayscale: 1, invertcolors: 1})
+            } catch {
+              ocrInvResult := OCR.FromRect(invL, invT, invW, invH, {scale: retryScale, grayscale: 1, invertcolors: 1})
+            }
+            if (ocrInvResult && WL_PickFromOcrResult(ocrInvResult, mouseX, mouseY, dpiScale, uiaRect, uiaContext, &word, &line, &srcTag)) {
+              srcTag .= "-inv"
+              found := true
+              fromOcr := true
+            }
+
+            if (!found) {
+              ocrGrayResult := ""
+              try {
+                ocrGrayResult := OCR.FromRect(invL, invT, invW, invH, {lang: ocrLang, scale: retryScale, grayscale: 1})
+              } catch {
+                ocrGrayResult := OCR.FromRect(invL, invT, invW, invH, {scale: retryScale, grayscale: 1})
+              }
+              if (ocrGrayResult && WL_PickFromOcrResult(ocrGrayResult, mouseX, mouseY, dpiScale, uiaRect, uiaContext, &word, &line, &srcTag)) {
+                srcTag .= "-gray"
+                found := true
+                fromOcr := true
+              }
+            }
           }
         }
       }
     } catch {
-      ; OCR 失败（截屏被拒、引擎初始化失败等）静默放弃，调用方按"未取到词"处理
-      return false
+      ; OCR 异常时静默继续，留给优先级 3 兜底
     }
   }
 
   ; ==========================================================
-  ; 【优先级 3】: UIA 标签文字按位置切词
+  ; 【优先级 3】: UIA 标签文字按字符权重与位置切词
   ; ==========================================================
-  ; 2026-09-19 实测：深色主题的标签墙上按 F2，UIA 明明读到了 "Nubiles Porn"，
-  ; 却因为含空格被上面取词那一关挡掉；OCR 又认不出深色底上的彩色小字，
-  ; 于是两边都空、函数返回 false —— 表现成"按了 F2 毫无反应，面板还是上次的结果"。
-  ; 这里兜底：把标签文字按空白切成 token，用鼠标在元素矩形里的水平比例挑一个。
-  ; 只对单行短标签生效，所以限定长度和 token 数。
-  if (!found && uiaContext != "" && StrLen(uiaContext) <= 60) {
-    toks := []
-    for pt in StrSplit(Trim(uiaContext), " ", " `t") {
-      t2 := RegExReplace(pt, "^[^\w\x{4e00}-\x{9fa5}\-]+|[^\w\x{4e00}-\x{9fa5}\-]+$", "")
-      if (t2 != "")
-        toks.Push(t2)
-    }
-    if (toks.Length >= 1 && toks.Length <= 8) {
-      pick := 1
-      if (toks.Length > 1 && IsObject(uiaRect)) {
-        try {
-          wRect := uiaRect.r - uiaRect.l
-          if (wRect > 0) {
-            pick := Integer(Floor((mouseX - uiaRect.l) / wRect * toks.Length)) + 1
-            if (pick < 1)
-              pick := 1
-            if (pick > toks.Length)
-              pick := toks.Length
-          }
-        }
-      }
-      word := toks[pick]
-      line := uiaContext
+  if (!found && uiaContext != "" && StrLen(uiaContext) <= 240) {
+    picked := WL_SplitTokenByMousePos(uiaContext, uiaRect, mouseX, mouseY, dpiScale)
+    if (picked != "") {
+      word := picked
+      line := WL_ExtractTargetSentence(uiaContext, picked)
       found := true
       srcTag := "uia-split"
     }
   }
 
-  WL_Debug(Format("src={1} mouse=({2},{3}) uiaCtx={4} word=[{5}] line=[{6}]",
-                  srcTag, mouseX, mouseY,
-                  (uiaContext = "" ? "-" : SubStr(uiaContext, 1, 60)),
-                  word, SubStr(line, 1, 150)))
-
   if (found && word != "") {
     ; 字符混淆修正只针对 OCR 结果：UIA 是内存直读，文本本身就是准确的，
     ; 强行修正反而会改错真实含数字的词（如 a1b、b0t）
-    if (fromOcr)
+    if (fromOcr) {
+      rawOcrWord := word
       word := FixOcrConfusion(word)
-    return true
+      if (word != rawOcrWord && line != "" && RegExMatch(rawOcrWord, "^[A-Za-z0-9|!]+$")) {
+        escRaw := RegExReplace(rawOcrWord, "[\\^$.|?*+()\[\]{}]", "\$0")
+        line := RegExReplace(line, "(?<![A-Za-z0-9])" . escRaw . "(?![A-Za-z0-9])", word)
+      }
+    }
   }
-  return false
+
+  logCtx := (uiaContext = "" ? "-" : RegExReplace(SubStr(uiaContext, 1, 80), "[\r\n]+", " "))
+  logLine := RegExReplace(SubStr(line, 1, 160), "[\r\n]+", " ")
+  WL_Debug(Format("src={1} mouse=({2},{3}) uiaCtx={4} word=[{5}] line=[{6}]",
+                  srcTag, mouseX, mouseY, logCtx, word, logLine))
+
+  return (found && word != "")
 }
 
 ; ===== 快捷键 F2 =====

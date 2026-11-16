@@ -939,7 +939,11 @@ FocusGeminiInput(hwnd, timeoutMs := 2500)
                 try best.SetFocus()
                 CoordMode("Mouse", "Screen")
                 Click(bestLoc.x + (bestLoc.w // 2), bestLoc.y + (bestLoc.h // 2))
-                Sleep(100)
+                Loop 4 {
+                    Sleep(20)
+                    try if (best.HasKeyboardFocus)
+                        break
+                }
                 return true
             }
         }
@@ -948,34 +952,144 @@ FocusGeminiInput(hwnd, timeoutMs := 2500)
     return false
 }
 
+; 优先通过 UIA 聚焦底部输入框，不可用时回退固定偏移点击
+ActivateGeminiInputBox(hwnd)
+{
+    if (!FocusGeminiInput(hwnd))
+    {
+        ; UIA 不可用时回退原方案：点击底部中央上移 85px 处
+        Sleep(200)
+        WinGetPos(&gx, &gy, &gw, &gh, "ahk_id " . hwnd)
+        CoordMode("Mouse", "Screen")
+        Click(gx + (gw // 2), gy + gh - 85)
+        Sleep(120)
+    }
+}
+
 ; 轮询等待 Gemini 输入框注册到粘贴内容后再回车。
 ; Gemini 是 contenteditable + React，粘贴到"发送按钮可用"之间有延迟；
-; 通过 UIA 读取底部输入框的文本值，非空即认为可以安全发送。
+; 通过 UIA 读取底部输入框的文本值，确认已出现预期内容即认为可安全发送。
 ; UIA 不可用时返回 false，由调用方按固定等待兜底（不影响原有流程）。
-WaitGeminiInputReady(hwnd, timeoutMs := 1200)
+WaitGeminiInputReady(hwnd, timeoutMs := 1200, expectedSub := "")
 {
     deadline := A_TickCount + timeoutMs
     while (A_TickCount < deadline)
     {
-        ; 任意一个候选有文本即认为就绪（不像 FocusGeminiInput 那样只认最靠下的），
-        ; 与重构前逐个元素判断的行为一致
+        ; 任意一个候选已包含目标文本即认为就绪（不像 FocusGeminiInput 那样只认最靠下的）
         for c in GetGeminiInputCandidates(hwnd)
         {
             try {
-                if (Trim(c.el.Value) != "")
+                val := Trim(c.el.Value)
+                if (val != "" && (expectedSub = "" || InStr(val, expectedSub)))
                     return true
             }
         }
-        Sleep(60)
+        Sleep(25)
     }
     return false
 }
 
-; F2 自动寻找并切换 Gemini 窗口的显示/隐藏（最小化/激活）
-; 当从外部切换到 Gemini 时，会自动抓取当前鼠标下的单词和句子并粘贴到输入框中
-F2::GeminiToggle()
+; 写入临时文本到剪贴板并附带 Win10/11 屏蔽历史与云同步标记，防止污染 Win+V 剪贴板历史
+SetClipboardTextNoHistory(text)
+{
+    static fmtExclude := DllCall("RegisterClipboardFormatW", "Str", "ExcludeClipboardContentFromMonitorProcessing", "UInt")
+    static fmtNoHist := DllCall("RegisterClipboardFormatW", "Str", "CanIncludeInClipboardHistory", "UInt")
+    static fmtNoCloud := DllCall("RegisterClipboardFormatW", "Str", "CanUploadToCloudClipboard", "UInt")
 
-GeminiToggle()
+    opened := false
+    Loop 5 {
+        if DllCall("OpenClipboard", "Ptr", A_ScriptHwnd) {
+            opened := true
+            break
+        }
+        Sleep(10)
+    }
+    if (!opened) {
+        A_Clipboard := text
+        return ClipWait(1)
+    }
+
+    ok := false
+    try {
+        if !DllCall("EmptyClipboard")
+            return false
+
+        bytes := StrPut(text, "UTF-16")
+        hMem := DllCall("GlobalAlloc", "UInt", 0x0042, "UPtr", bytes, "Ptr") ; GMEM_MOVEABLE | GMEM_ZEROINIT
+        if (!hMem)
+            return false
+        pMem := DllCall("GlobalLock", "Ptr", hMem, "Ptr")
+        if (!pMem) {
+            DllCall("GlobalFree", "Ptr", hMem)
+            return false
+        }
+        StrPut(text, pMem, "UTF-16")
+        DllCall("GlobalUnlock", "Ptr", hMem)
+
+        if !DllCall("SetClipboardData", "UInt", 13, "Ptr", hMem, "Ptr") { ; CF_UNICODETEXT = 13
+            DllCall("GlobalFree", "Ptr", hMem)
+            return false
+        }
+        ok := true
+
+        for fmt in [fmtExclude, fmtNoHist, fmtNoCloud] {
+            if (!fmt)
+                continue
+            hFlag := DllCall("GlobalAlloc", "UInt", 0x0042, "UPtr", 4, "Ptr")
+            if (!hFlag)
+                continue
+            ; GMEM_ZEROINIT 已将 4 字节 DWORD 置 0，表示禁止记入历史与云剪贴板
+            if !DllCall("SetClipboardData", "UInt", fmt, "Ptr", hFlag, "Ptr")
+                DllCall("GlobalFree", "Ptr", hFlag)
+        }
+    } finally {
+        DllCall("CloseClipboard")
+    }
+
+    if (!ok) {
+        A_Clipboard := text
+        return ClipWait(1)
+    }
+    return true
+}
+
+; F2 单击切换 Gemini 显示/隐藏并在打开时抓词发送；双击 F2 仅打开/激活 Gemini 窗口不抓词。
+; 被热键吞掉的键在部分环境下 GetKeyState 恒为 0，不能用 KeyWait 判松开，故用 F2 / F2 up 配合定时器判定。
+global g_F2TapState := {isDown: false, downTick: 0, lastTapTick: 0, lastDoubleTick: 0, pendingSingle: false, snapX: 0, snapY: 0, snapWin: 0}
+
+F2::HandleF2Down()
+F2 up::HandleF2Up()
+
+HandleF2Down()
+{
+    global g_F2TapState
+    CoordMode("Mouse", "Screen")
+    MouseGetPos(&mx, &my, &mwin)
+    action := F2_OnKeyDown(g_F2TapState, A_TickCount, mx, my, mwin)
+    if (action = "double") {
+        SetTimer(RunF2SingleTap, 0)
+        GeminiToggle(true)
+    } else if (action = "wait_single") {
+        SetTimer(RunF2SingleTap, -260)
+    }
+}
+
+HandleF2Up()
+{
+    global g_F2TapState
+    g_F2TapState.isDown := false
+}
+
+RunF2SingleTap()
+{
+    global g_F2TapState
+    if (!g_F2TapState.pendingSingle)
+        return
+    g_F2TapState.pendingSingle := false
+    GeminiToggle(false, g_F2TapState.snapX, g_F2TapState.snapY, g_F2TapState.snapWin)
+}
+
+GeminiToggle(onlyOpen := false, snapX?, snapY?, snapWin?)
 {
     global GeminiAutoHwnd
     GeminiHwnd := GetGeminiWindow()
@@ -993,10 +1107,11 @@ GeminiToggle()
         }
         else
         {
-            ; 未检测到 Gemini 窗口：先抓词，再自动打开（Chrome 没启动时会一并拉起）。
+            ; 未检测到 Gemini 窗口：单按先抓词（双击只开窗时跳过），再自动打开。
             ; 抓词必须在 OpenGeminiWindow 之前——它会激活 Chrome，
             ; 之后鼠标底下就是 Chrome 的内容，取到的词不再是原界面上的那个。
-            hasWord := GetWordAndLineAtMouse(&word, &line)
+            if (!onlyOpen)
+                hasWord := GetWordAndLineAtMouse(&word, &line, snapX?, snapY?, snapWin?)
             GeminiHwnd := OpenGeminiWindow()
             if (!GeminiHwnd)
                 return
@@ -1020,9 +1135,8 @@ GeminiToggle()
         return
     }
 
-    ; justOpened 时窗口刚被弹出来，本来就是可见的；
-    ; 不排除掉就会立刻走进隐藏分支，表现为"按 F2 闪一下又没了"
-    if (isVisible && !justOpened)
+    ; 只有单按且窗口在屏幕上（非刚弹出）时才隐藏；双击 F2 一律走显示/激活分支
+    if (!onlyOpen && isVisible && !justOpened)
     {
         ; 只要窗口在屏幕上（不管是不是活动窗口），按 F2 一律直接隐藏（从任务栏也消失）
         try {
@@ -1034,104 +1148,165 @@ GeminiToggle()
     }
     else
     {
-        ; 如果窗口当前被隐藏了，则：
-        ; 1. 先抓取当前鼠标下的词句（必须在激活窗口前抓取，否则会失去原界面的焦点）
+        ; 如果窗口当前被隐藏（或双击 F2 强制打开/激活）：
+        ; 1. 单按时先抓取当前鼠标下的词句（必须在激活窗口前抓取，否则会失去原界面的焦点）
         ;    justOpened 的情况已经在打开窗口之前抓过了，这里不能再抓一次
-        if (!justOpened)
-            hasWord := GetWordAndLineAtMouse(&word, &line)
+        if (!onlyOpen && !justOpened)
+            hasWord := GetWordAndLineAtMouse(&word, &line, snapX?, snapY?, snapWin?)
 
         ; 2. 恢复并激活 Gemini 窗口
         try {
             DetectHiddenWindows(true)
-            WinShow("ahk_id " . GeminiHwnd)
+            if (!isVisible)
+                WinShow("ahk_id " . GeminiHwnd)
+            if (WinGetMinMax("ahk_id " . GeminiHwnd) == -1)
+                WinRestore("ahk_id " . GeminiHwnd)
             DetectHiddenWindows(false)
             EnsureWindowOnScreen(GeminiHwnd)
-            Sleep(150)
             WinActivate("ahk_id " . GeminiHwnd)
+            if !WinWaitActive("ahk_id " . GeminiHwnd, , 0.15)
+                WinActivate("ahk_id " . GeminiHwnd)
         }
         catch TargetError {
             GeminiAutoHwnd := 0
             return
         }
-        
-        ; 3. 如果成功抓取到词句，则将其处理干净（过滤表情、对象占位符，且将所有换行和连续空格压缩为单行单空格）
-        if (hasWord)
+
+        if (onlyOpen || !hasWord)
         {
-            word := Trim(RegExReplace(StripEmoji(word), "[\r\n\s]+", " "))
-            line := Trim(RegExReplace(StripEmoji(line), "[\r\n\s]+", " "))
-            
-            ; 缓存为当前生词并预生成 TTS 语音，供右键朗读使用
-            global WL_CurrentWord, WL_CurrentContext
-            WL_CurrentWord := word
-            WL_CurrentContext := line
-            WL_PregenTts(word)
-            
-            textToSend := "单词: " . word . "`n句子: " . line
-            
-            ClipSaved := ClipboardAll()
-            A_Clipboard := textToSend
-            if !ClipWait(2)
-            {
-                A_Clipboard := ClipSaved
-                return
-            }
-            
-            ; 等待窗口激活后执行清除并粘贴
             try {
                 if WinWaitActive("ahk_id " . GeminiHwnd, , 3)
                 {
-                    ; 保存鼠标原位置，操作完成后恢复
+                    CoordMode("Mouse", "Screen")
                     MouseGetPos(&origX, &origY)
-
-                    ; 优先用 UIA 定位输入框：固定坐标偏移在 RDP 会话下会因
-                    ; DPI/分辨率改变而点偏，导致 ^a/^v 落到错误的元素上
-                    if (!FocusGeminiInput(GeminiHwnd))
-                    {
-                        ; UIA 不可用时回退原方案：点击底部中央上移 85px 处
-                        Sleep(300)
-                        WinGetPos(&gx, &gy, &gw, &gh, "ahk_id " . GeminiHwnd)
-                        CoordMode("Mouse", "Screen")
-                        Click(gx + (gw // 2), gy + gh - 85)
-                        Sleep(150)
-                    }
-                    try {
-                        Suspend(true)  ; 暂时挂起热键，防止 ^a 被 emacs 绑定拦截
-                        Send("^a") ; 全选输入框内已有内容
-                        Sleep(80)
-                        Send("^v") ; 粘贴新内容覆盖
-                        ; Gemini 输入框是 contenteditable，粘贴后需要等 React 重渲染、
-                        ; 发送按钮从禁用变可用；等待过短会让 {Enter} 被当成插入换行而非发送。
-                        ; 轮询确认输入框已有内容再回车，最多等约 1.2s（RDP/低配机更慢）
-                        Sleep(150)
-                        WaitGeminiInputReady(GeminiHwnd, 1200)
-                        Send("{Enter}") ; 回车发送
-                    } finally {
-                        Suspend(false)  ; 无论是否抛错都必须恢复，否则所有 emacs 热键会永久失效
-                    }
-
-                    ; 恢复鼠标到原位置
+                    ActivateGeminiInputBox(GeminiHwnd)
                     MouseMove(origX, origY)
                 }
             }
             catch TargetError {
                 GeminiAutoHwnd := 0
             }
-            finally {
-                Sleep(100)
-                A_Clipboard := ClipSaved  ; 无论成功失败都恢复剪贴板，避免污染用户剪贴板
+            return
+        }
+
+        ; 3. 单按且成功抓取到词句：将其处理干净（过滤表情、对象占位符，且将所有换行和连续空格压缩为单行单空格）
+        word := Trim(RegExReplace(StripEmoji(word), "[\r\n\s]+", " "))
+        line := Trim(RegExReplace(StripEmoji(line), "[\r\n\s]+", " "))
+
+        ; 缓存为当前生词并预生成 TTS 语音，供右键朗读使用
+        global WL_CurrentWord, WL_CurrentContext
+        WL_CurrentWord := word
+        WL_CurrentContext := line
+        WL_PregenTts(word)
+
+        textToSend := "单词: " . word . "`n句子: " . line
+
+        ClipSaved := ClipboardAll()
+        if !SetClipboardTextNoHistory(textToSend)
+        {
+            A_Clipboard := ClipSaved
+            return
+        }
+
+        pasteConfirmed := false
+        ; 等待窗口激活后聚焦输入框、清除并粘贴
+        try {
+            if WinWaitActive("ahk_id " . GeminiHwnd, , 3)
+            {
+                ; 保存鼠标原位置，操作完成后恢复（显式 Screen 坐标避免定时器线程默认 Window 坐标漂移）
+                CoordMode("Mouse", "Screen")
+                MouseGetPos(&origX, &origY)
+
+                ActivateGeminiInputBox(GeminiHwnd)
+                try {
+                    Suspend(true)  ; 暂时挂起热键，防止 ^a 被 emacs 绑定拦截
+                    Send("^a") ; 全选输入框内已有内容
+                    Sleep(30)
+                    Send("^v") ; 粘贴新内容覆盖
+                    ; Gemini 输入框是 contenteditable，粘贴后需要等 React 重渲染、
+                    ; 发送按钮从禁用变可用；轮询确认目标词已写入输入框后再回车
+                    Sleep(30)
+                    pasteConfirmed := WaitGeminiInputReady(GeminiHwnd, 1200, word)
+                    Sleep(pasteConfirmed ? 35 : 120)
+                    Send("{Enter}") ; 回车发送
+                } finally {
+                    Suspend(false)  ; 无论是否抛错都必须恢复，否则所有 emacs 热键会永久失效
+                }
+
+                ; 恢复鼠标到原位置
+                MouseMove(origX, origY)
             }
+        }
+        catch TargetError {
+            GeminiAutoHwnd := 0
+        }
+        finally {
+            Sleep(pasteConfirmed ? 20 : 100)
+            A_Clipboard := ClipSaved  ; 无论成功失败都恢复剪贴板，避免污染用户剪贴板
         }
 
     }
 }
 
-; 当 Google Gemini 窗口处于活动状态时，拦截鼠标右键，支持单击朗读单词，长按朗读句子
-#HotIf (GeminiAutoHwnd && WinActive("ahk_id " . GeminiAutoHwnd))
+; 判断指定句柄是否为可见的 Gemini 窗口（先走缓存快路径，失效或脚本刚重载时自动重新认领）
+IsGeminiHwnd(hwnd)
+{
+    global GeminiAutoHwnd
+    if (!hwnd)
+        return false
+
+    if (GeminiAutoHwnd && hwnd == GeminiAutoHwnd) {
+        try {
+            if (WinGetStyle(hwnd) & 0x10000000)
+                return true
+        } catch {
+            GeminiAutoHwnd := 0
+        }
+        return false
+    }
+
+    try {
+        if (WinGetClass(hwnd) != "Chrome_WidgetWin_1")
+            return false
+        style := WinGetStyle(hwnd)
+        if !(style & 0x10000000) || ((style & 0xC00000) != 0xC00000)
+            return false
+        title := WinGetTitle(hwnd)
+        if (title != "" && title != "Gemini")
+            return false
+        WinGetPos(, , &w, &h, hwnd)
+        if (w < 200 || h < 200)
+            return false
+        if (StrLower(WinGetProcessName(hwnd)) != "chrome.exe")
+            return false
+        GeminiAutoHwnd := hwnd
+        return true
+    } catch {
+        return false
+    }
+}
+
+; 右键仅在 Gemini 为当前活动窗口或鼠标正悬停于其上时拦截，兼顾置顶未激活与刚重载脚本场景
+IsGeminiRButtonContext()
+{
+    activeHwnd := WinExist("A")
+    if (activeHwnd && IsGeminiHwnd(activeHwnd))
+        return true
+    MouseGetPos(, , &hoverHwnd)
+    return !!(hoverHwnd && hoverHwnd != activeHwnd && IsGeminiHwnd(hoverHwnd))
+}
+
+; 当 Google Gemini 窗口处于活动状态或鼠标位于其上方时，拦截鼠标右键，支持单击朗读单词，长按朗读句子
+; 加 #SuspendExempt 避免 F2 粘贴期间 Suspend(true) 放行右键；吞掉 RButton up 防止 Chrome 弹出上下文菜单
+#SuspendExempt
+#HotIf IsGeminiRButtonContext()
 RButton::
 {
     WL_HandleRightClick()
 }
+RButton up::return
 #HotIf
+#SuspendExempt false
 
 ; 共享模块（按依赖顺序）
 #Include "shared/ollama_api.ahk"        ; 基础工具函数（StripEmoji 等）

@@ -122,6 +122,28 @@ IsYoudaoEligible(text)
   return (words.Length <= 4 && StrLen(t) <= 40)
 }
 
+; ===== 将字符串按 UTF-8 做 RFC 3986 URL 编码（处理空格与撇号等特殊字符） =====
+UriEncodeForUrl(str)
+{
+  if (str = "")
+    return ""
+  buf := Buffer(StrPut(str, "UTF-8"))
+  cb := StrPut(str, buf, "UTF-8") - 1
+  if (cb <= 0)
+    return ""
+  out := ""
+  Loop cb {
+    b := NumGet(buf, A_Index - 1, "UChar")
+    if ((b >= 65 && b <= 90) || (b >= 97 && b <= 122) || (b >= 48 && b <= 57)
+        || b == 45 || b == 46 || b == 95 || b == 126) {
+      out .= Chr(b)
+    } else {
+      out .= Format("%{:02X}", b)
+    }
+  }
+  return out
+}
+
 ; ===== 启动有道词典真人发音下载（后台异步），返回进程 PID；失败返回 0 =====
 ; voiceType: 0 = 美音（默认），1 = 英音
 RunYoudaoWordAudio(word, outFile, voiceType := 0)
@@ -130,14 +152,16 @@ RunYoudaoWordAudio(word, outFile, voiceType := 0)
   if (text = "")
     return 0
 
-  ; 过滤非字母/连字符字符
-  cleanWord := RegExReplace(text, "[^a-zA-Z\s'-]", "")
+  text := StrReplace(StrReplace(text, Chr(0x2019), "'"), Chr(0x2018), "'")
+  ; 过滤非字母/数字/空格/连字符/撇号并折叠多余空白
+  cleanWord := Trim(RegExReplace(RegExReplace(text, "[^a-zA-Z0-9\s'-]", ""), "\s+", " "))
   if (cleanWord = "")
     cleanWord := text
+  encodedWord := UriEncodeForUrl(cleanWord)
 
   try {
     ; 使用系统自带 curl 快速下载真人原声 MP3（最大超时 3 秒）
-    cmd := 'curl -s -L --max-time 3 "https://dict.youdao.com/dictvoice?audio=' . cleanWord . '&type=' . voiceType . '" -o "' . outFile . '"'
+    cmd := 'curl -s -L --max-time 3 "https://dict.youdao.com/dictvoice?audio=' . encodedWord . '&type=' . voiceType . '" -o "' . outFile . '"'
     Run(cmd, , "Hide", &outPid)
     return outPid
   }
