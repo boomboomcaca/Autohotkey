@@ -329,6 +329,12 @@ GetWordAndLineAtMouse(&word, &line, snapX?, snapY?, snapWin?)
   ; ==========================================================
   ; 【优先级 2】: Windows 10/11 原生 WinRT OCR API - 屏幕极速截取
   ; ==========================================================
+  ocrRan := false
+  ocrFailed := false
+  capX := 0, capY := 0, capW := 0, capH := 0
+  p1Lines := -1, r1Lines := -1, r2Lines := -1
+  ocrErr := ""
+
   if (!found) {
     try {
       ; 宽扁截取区域：横向更宽以防切断长字幕，纵向更窄以减少界面按钮干扰
@@ -347,7 +353,7 @@ GetWordAndLineAtMouse(&word, &line, snapX?, snapY?, snapWin?)
       try {
         if (winUnder) {
           WinGetPos(&wx, &wy, &ww, &wh, "ahk_id " . winUnder)
-          if (ww >= 120 && wh >= 80 && mouseX >= wx && mouseX < wx + ww && mouseY >= wy && mouseY < wy + wh) {
+          if (ww >= Round(300 * dpiScale) && wh >= Round(150 * dpiScale) && mouseX >= wx && mouseX < wx + ww && mouseY >= wy && mouseY < wy + wh) {
             rL := Max(rL, wx)
             rT := Max(rT, wy)
             rR := Min(rR, wx + ww)
@@ -360,6 +366,7 @@ GetWordAndLineAtMouse(&word, &line, snapX?, snapY?, snapWin?)
       capW := rR - rL, capH := rB - rT
 
       if (capW >= 80 && capH >= 60) {
+        ocrRan := true
         maxImgDim := 4096
         try if (OCR.MaxImageDimension > 0)
           maxImgDim := OCR.MaxImageDimension
@@ -376,13 +383,15 @@ GetWordAndLineAtMouse(&word, &line, snapX?, snapY?, snapWin?)
         } catch {
           ocrResult := OCR.FromRect(capX, capY, capW, capH, {scale: primaryScale})
         }
+        if (IsObject(ocrResult))
+          p1Lines := ocrResult.Lines.Length
 
         if (ocrResult && WL_PickFromOcrResult(ocrResult, mouseX, mouseY, dpiScale, uiaRect, uiaContext, &word, &line, &srcTag)) {
           found := true
           fromOcr := true
         }
 
-        ; 深色背景 / 低对比度纹理文字重试：紧凑区域整数 2x + 灰度/反色预处理
+        ; 紧凑区域重试：4K 先补原彩 2x（保留 ClearType 彩色亚像素），再与暗色/浅色预处理配合兜底
         if (!found) {
           invW := Round(520 * dpiScale)
           invH := Round(130 * dpiScale)
@@ -397,37 +406,40 @@ GetWordAndLineAtMouse(&word, &line, snapX?, snapY?, snapWin?)
             if (Ceil(Max(invW, invH) * retryScale) > maxImgDim)
               retryScale := 1
 
-            ocrInvResult := ""
-            try {
-              ocrInvResult := OCR.FromRect(invL, invT, invW, invH, {lang: ocrLang, scale: retryScale, grayscale: 1, invertcolors: 1})
-            } catch {
-              ocrInvResult := OCR.FromRect(invL, invT, invW, invH, {scale: retryScale, grayscale: 1, invertcolors: 1})
-            }
-            if (ocrInvResult && WL_PickFromOcrResult(ocrInvResult, mouseX, mouseY, dpiScale, uiaRect, uiaContext, &word, &line, &srcTag)) {
-              srcTag .= "-inv"
-              found := true
-              fromOcr := true
-            }
+            retrySpecs := (dpi >= 168)
+              ? [{tag: "-2x", opts: {lang: ocrLang, scale: retryScale}, fallback: {scale: retryScale}}
+               , {tag: "-inv", opts: {lang: ocrLang, scale: retryScale, grayscale: 1, invertcolors: 1}, fallback: {scale: retryScale, grayscale: 1, invertcolors: 1}}]
+              : [{tag: "-inv", opts: {lang: ocrLang, scale: retryScale, grayscale: 1, invertcolors: 1}, fallback: {scale: retryScale, grayscale: 1, invertcolors: 1}}
+               , {tag: "-gray", opts: {lang: ocrLang, scale: retryScale, grayscale: 1}, fallback: {scale: retryScale, grayscale: 1}}]
 
-            if (!found) {
-              ocrGrayResult := ""
+            for idx, spec in retrySpecs {
+              ocrRetryRes := ""
               try {
-                ocrGrayResult := OCR.FromRect(invL, invT, invW, invH, {lang: ocrLang, scale: retryScale, grayscale: 1})
+                ocrRetryRes := OCR.FromRect(invL, invT, invW, invH, spec.opts)
               } catch {
-                ocrGrayResult := OCR.FromRect(invL, invT, invW, invH, {scale: retryScale, grayscale: 1})
+                ocrRetryRes := OCR.FromRect(invL, invT, invW, invH, spec.fallback)
               }
-              if (ocrGrayResult && WL_PickFromOcrResult(ocrGrayResult, mouseX, mouseY, dpiScale, uiaRect, uiaContext, &word, &line, &srcTag)) {
-                srcTag .= "-gray"
+              cnt := IsObject(ocrRetryRes) ? ocrRetryRes.Lines.Length : -1
+              if (idx == 1)
+                r1Lines := cnt
+              else
+                r2Lines := cnt
+              if (ocrRetryRes && WL_PickFromOcrResult(ocrRetryRes, mouseX, mouseY, dpiScale, uiaRect, uiaContext, &word, &line, &srcTag)) {
+                srcTag .= spec.tag
                 found := true
                 fromOcr := true
+                break
               }
             }
           }
         }
       }
-    } catch {
-      ; OCR 异常时静默继续，留给优先级 3 兜底
+    } catch as e {
+      ; 记录异常摘要以便调试日志定位，随后继续留给优先级 3 兜底
+      ocrErr := e.Message
     }
+    if (ocrRan || ocrErr != "")
+      ocrFailed := (!found || ocrErr != "")
   }
 
   ; ==========================================================
@@ -456,10 +468,20 @@ GetWordAndLineAtMouse(&word, &line, snapX?, snapY?, snapWin?)
     }
   }
 
+  ocrDiag := ""
+  if (ocrFailed) {
+    rectStr := (IsObject(uiaRect) && uiaRect.r > uiaRect.l)
+      ? Format(" rect=({1},{2},{3},{4})", uiaRect.l, uiaRect.t, uiaRect.r, uiaRect.b)
+      : ""
+    errStr := (ocrErr != "") ? (" err=" . RegExReplace(ocrErr, "[\r\n]+", " ")) : ""
+    ocrDiag := Format(" ocr=cap({1},{2},{3}x{4}) p1={5} r1={6} r2={7}{8}{9}",
+                      capX, capY, capW, capH, p1Lines, r1Lines, r2Lines, rectStr, errStr)
+  }
+
   logCtx := (uiaContext = "" ? "-" : RegExReplace(SubStr(uiaContext, 1, 80), "[\r\n]+", " "))
   logLine := RegExReplace(SubStr(line, 1, 160), "[\r\n]+", " ")
-  WL_Debug(Format("src={1} mouse=({2},{3}) uiaCtx={4} word=[{5}] line=[{6}]",
-                  srcTag, mouseX, mouseY, logCtx, word, logLine))
+  WL_Debug(Format("src={1} mouse=({2},{3}) uiaCtx={4} word=[{5}] line=[{6}]{7}",
+                  srcTag, mouseX, mouseY, logCtx, word, logLine, ocrDiag))
 
   return (found && word != "")
 }

@@ -905,50 +905,129 @@ WL_PickFromOcrResult(ocrResult, mouseX, mouseY, dpiScale, uiaRect, uiaContext, &
     return true
 }
 
-; ===== 按字符长度权重及元素矩形位置切分 UIA 短语取词 =====
+; ===== 按比例字体宽度的近似字符宽度单位估算 =====
+WL_EstimateTokenUnits(token)
+{
+    total := 0.0
+    Loop Parse, token {
+        ch := A_LoopField
+        if RegExMatch(ch, "[\x{4e00}-\x{9fff}\x{3000}-\x{303F}\x{FF00}-\x{FFEF}]") {
+            total += 1.9
+        } else if (ch == "M" || ch == "W") {
+            total += 1.45
+        } else if (ch == "I") {
+            total += 0.55
+        } else if RegExMatch(ch, "[A-Z]") {
+            total += 1.15
+        } else if (ch == "m" || ch == "w") {
+            total += 1.35
+        } else if RegExMatch(ch, "[ijltfr1!|:;.,'`"()\[\]/\\\-]") {
+            total += 0.55
+        } else {
+            total += 0.95
+        }
+    }
+    return Max(0.5, total)
+}
+
+; ===== 按行宽容量贪心折行（记录每行累计宽度与每个 token 的起止单位） =====
+WL_WrapTokensToLines(items, capUnits, spaceUnits := 0.55)
+{
+    lines := []
+    currTokens := []
+    currWidth := 0.0
+
+    for it in items {
+        nextStart := (currWidth > 0) ? (currWidth + spaceUnits) : 0.0
+        if (currWidth > 0 && nextStart + it.w > capUnits) {
+            lines.Push({tokens: currTokens, width: currWidth})
+            currTokens := []
+            currWidth := 0.0
+            nextStart := 0.0
+        }
+        endU := nextStart + it.w
+        currTokens.Push({clean: it.clean, startU: nextStart, endU: endU})
+        currWidth := endU
+    }
+    if (currTokens.Length > 0)
+        lines.Push({tokens: currTokens, width: currWidth})
+    return lines
+}
+
+; ===== 模拟按行折行与字符比例权重从 UIA 标签矩形内定位鼠标下的单词 =====
 WL_SplitTokenByMousePos(uiaContext, uiaRect, mouseX, mouseY, dpiScale)
 {
     if (uiaContext = "" || StrLen(uiaContext) > 240)
         return ""
-    toks := []
-    totalWeight := 0
+
+    items := []
+    fallbackToken := ""
+    validWordCount := 0
     for pt in StrSplit(Trim(uiaContext), " ", " `t") {
         if (pt = "")
             continue
         clean := WL_CleanWord(pt)
-        if (clean = "")
-            continue
-        weight := Max(1, StrLen(pt)) + 1
-        toks.Push({clean: clean, weight: weight})
-        totalWeight += weight
+        if (clean != "") {
+            validWordCount++
+            if (fallbackToken = "")
+                fallbackToken := clean
+        }
+        items.Push({raw: pt, clean: clean, w: WL_EstimateTokenUnits(pt)})
     }
-    if (toks.Length = 0 || toks.Length > 35)
+    if (validWordCount = 0 || items.Length > 45)
         return ""
-    if (toks.Length = 1 || !IsObject(uiaRect))
-        return toks[1].clean
+    if (validWordCount = 1 || !IsObject(uiaRect))
+        return fallbackToken
 
     wRect := uiaRect.r - uiaRect.l
     hRect := uiaRect.b - uiaRect.t
     if (wRect <= 0)
-        return toks[1].clean
+        return fallbackToken
 
-    estLines := (hRect <= Round(42 * dpiScale)) ? 1 : Max(1, Min(4, Round(hRect / (26 * dpiScale))))
+    estLines := (hRect <= Round(38 * dpiScale)) ? 1 : Max(1, Min(4, Round(hRect / (28 * dpiScale))))
+    lineH := Max(12 * dpiScale, hRect / estLines)
+    lineCapUnits := Max(6.0, wRect / (lineH * 0.38))
+
+    wrapped := WL_WrapTokensToLines(items, lineCapUnits)
+    if (wrapped.Length > estLines) {
+        Loop 4 {
+            lineCapUnits *= 1.12
+            wrapped := WL_WrapTokensToLines(items, lineCapUnits)
+            if (wrapped.Length <= estLines)
+                break
+        }
+    }
+
     relX := Max(0.0, Min(0.9999, (mouseX - uiaRect.l) / wRect))
-    if (estLines > 1 && hRect > 0) {
-        lineIdx := Max(0, Min(estLines - 1, Floor((mouseY - uiaRect.t) / hRect * estLines)))
-        relPos := (lineIdx + relX) / estLines
+    if (wrapped.Length == 1) {
+        targetLineIdx := 1
     } else {
-        relPos := relX
+        lineIdx := Max(0, Min(wrapped.Length - 1, Floor((mouseY - uiaRect.t) / Max(1, hRect) * wrapped.Length)))
+        targetLineIdx := lineIdx + 1
     }
 
-    targetW := relPos * totalWeight
-    acc := 0
-    for tk in toks {
-        acc += tk.weight
-        if (acc >= targetW)
-            return tk.clean
+    targetLine := wrapped[targetLineIdx]
+    if (wrapped.Length > 1) {
+        lineSpanUnits := Max(targetLine.width, lineCapUnits)
+    } else {
+        lineSpanUnits := (targetLine.width < lineCapUnits * 0.78) ? lineCapUnits : targetLine.width
     }
-    return toks[toks.Length].clean
+    targetU := relX * lineSpanUnits
+
+    bestClean := ""
+    bestDist := 999999.0
+    for tk in targetLine.tokens {
+        if (tk.clean = "")
+            continue
+        dist := Max(0.0, tk.startU - targetU, targetU - tk.endU)
+        if (dist < bestDist) {
+            bestDist := dist
+            bestClean := tk.clean
+            if (dist == 0.0)
+                break
+        }
+    }
+    return (bestClean != "") ? bestClean : fallbackToken
 }
 
 ; ===== 切换图钉状态 =====
@@ -1036,6 +1115,7 @@ CloseWordGui()
   global g_WL_WordEdit, g_WL_ContextEdit
   global g_StreamPidChat, g_ChatPending, g_QuestionEditCtrl, g_AnswerEditCtrl, g_SendBtnCtrl
   global g_TtsPlaying, g_HoverTarget, g_MainGui, g_PromptDropdown, g_WL_AnkiBtn, g_OrigEditCtrl
+  global g_WL_TtsPlayPending
 
   ; 终止请求
   if (g_WL_StreamPid > 0) {
@@ -1052,7 +1132,10 @@ CloseWordGui()
   SetTimer(CheckChatResult, 0)
   SetTimer(WL_CheckClickOutside, 0)
   SetTimer(CheckTtsHover, 0)
+  g_WL_TtsPlayPending := false
+  WL_StopSentenceTts()
   try SoundPlay("NonExistent.zzz")
+  StopLocalSapi()
   g_TtsPlaying := false
   g_HoverTarget := ""
 
@@ -1099,83 +1182,234 @@ CloseWordGui()
   }
 }
 
-; ===== 预生成 TTS 音频（后台优先下载有道真人原声） =====
+; ===== 查词单词预生成与整句朗读状态（配合 word_lookup.ahk 里的基础 g_WL_Tts* 变量） =====
+global g_WL_TtsState := "idle"       ; "idle" / "loading" / "ready" / "failed"
+global g_WL_TtsStage := ""           ; "" / "youdao" / "google"
+global g_WL_TtsPlayPending := false  ; 加载完成后是否自动触发播放
+global g_WL_TtsTmpYoudao := ""
+global g_WL_TtsTmpGoogle := ""
+global g_WL_TtsFallbackFile := ""
+global g_WL_TtsTargetCache := ""
+global g_WL_TtsLang := "en-US"
+global g_WL_SentPid := 0             ; 整句 Google TTS 当前 curl PID
+global g_WL_SentText := ""
+global g_WL_SentJob := ""
+
+WL_ResetPregenTempFiles()
+{
+  global g_WL_TtsTmpYoudao, g_WL_TtsTmpGoogle, g_WL_TtsFallbackFile
+  TtsDeleteTempFile(g_WL_TtsTmpYoudao)
+  TtsDeleteTempFile(g_WL_TtsTmpGoogle)
+  TtsDeleteTempFile(g_WL_TtsFallbackFile)
+  g_WL_TtsTmpYoudao := ""
+  g_WL_TtsTmpGoogle := ""
+  g_WL_TtsFallbackFile := ""
+}
+
+WL_ApplyPregenFallback()
+{
+  global g_WL_TtsFallbackFile, g_WL_TtsFile, g_WL_TtsState
+  fb := g_WL_TtsFallbackFile
+  g_WL_TtsFallbackFile := ""
+  if (fb != "" && TtsGetMp3Info(fb).valid) {
+    g_WL_TtsFile := fb
+    g_WL_TtsState := "ready"
+  } else {
+    TtsDeleteTempFile(fb)
+    g_WL_TtsState := "failed"
+  }
+}
+
+; ===== 预生成 TTS 音频（缓存 → 有道高质量真人 → Google 神经网络自动升级） =====
 WL_PregenTts(word)
 {
   global g_WL_TtsFile, g_WL_TtsPid, g_WL_TtsWord, g_WL_TtsGenTick
+  global g_WL_TtsState, g_WL_TtsStage, g_WL_TtsPlayPending
+  global g_WL_TtsTmpYoudao, g_WL_TtsTmpGoogle, g_WL_TtsTargetCache, g_WL_TtsLang
 
-  ; 终止上一次预生成
+  SetTimer(WL_PollPregenTts, 0)
   if (g_WL_TtsPid > 0) {
     try ProcessClose(g_WL_TtsPid)
     g_WL_TtsPid := 0
   }
-
-  text := Trim(word)
-  if (text = "")
-    return
+  g_WL_TtsPlayPending := false
 
   oldFile := g_WL_TtsFile
   g_WL_TtsFile := ""
-  if (oldFile != "")
-    try FileDelete(oldFile)
+  TtsDeleteTempFile(oldFile)
+  WL_ResetPregenTempFiles()
 
-  if (!IsYoudaoEligible(text)) {
+  text := Trim(word)
+  if (text = "") {
     g_WL_TtsWord := ""
+    g_WL_TtsState := "idle"
+    g_WL_TtsStage := ""
     return
   }
 
+  info := TtsResolveCacheInfo(text)
   g_WL_TtsWord := text
-  g_WL_TtsFile := A_Temp . "\ahk_wl_tts_" . A_TickCount . ".mp3"
+  g_WL_TtsLang := info.lang
+  g_WL_TtsTargetCache := info.cacheFile
 
-  ; 读取发音类型（0=美音，1=英音）
-  voiceType := 0
-  try voiceType := Integer(IniRead(A_ScriptDir . "\ollama_config.ini", "Settings", "WordVoiceType", "0"))
-
-  ; 优先启动有道真人母语者原声录音下载（极速、免翻墙、100% 真人发音）
-  outPid := RunYoudaoWordAudio(text, g_WL_TtsFile, voiceType)
-  if (outPid) {
-    g_WL_TtsPid := outPid
-    g_WL_TtsGenTick := A_TickCount
-  }
-}
-
-; ===== 强制单次朗读单词（右键触发真人发音） =====
-WL_PlayTtsOnce()
-{
-  global WL_CurrentWord, g_WL_TtsFile, g_WL_TtsPid, g_WL_TtsWord, g_WL_TtsGenTick
-
-  text := Trim(WL_CurrentWord)
-  if (text = "")
+  if TtsCacheHit(info.cacheFile, info.isYoudao) {
+    g_WL_TtsFile := info.cacheFile
+    g_WL_TtsState := "ready"
+    g_WL_TtsStage := ""
     return
-
-  if (text != g_WL_TtsWord) {
-    WL_PregenTts(text)
   }
 
-  ; 非阻塞等待下载（最多 3 秒超时）
-  if (g_WL_TtsPid > 0 && ProcessExist(g_WL_TtsPid)) {
-    if (A_TickCount - g_WL_TtsGenTick < 3000) {
-      SetTimer(WL_PlayTtsOnce, -50)
+  g_WL_TtsState := "loading"
+  if (info.isYoudao) {
+    tmpYd := A_Temp . "\ahk_wl_tts_yd_" . A_TickCount . ".mp3"
+    outPid := RunYoudaoWordAudio(text, tmpYd, info.voiceType)
+    if (outPid) {
+      g_WL_TtsTmpYoudao := tmpYd
+      g_WL_TtsStage := "youdao"
+      g_WL_TtsPid := outPid
+      g_WL_TtsGenTick := A_TickCount
+      SetTimer(WL_PollPregenTts, 50)
       return
     }
+  }
+
+  if (StrLen(text) <= 190) {
+    tmpG := A_Temp . "\ahk_wl_tts_g_" . A_TickCount . ".mp3"
+    outPid := RunGoogleTtsAudio(text, tmpG, info.lang)
+    if (outPid) {
+      g_WL_TtsTmpGoogle := tmpG
+      g_WL_TtsStage := "google"
+      g_WL_TtsPid := outPid
+      g_WL_TtsGenTick := A_TickCount
+      SetTimer(WL_PollPregenTts, 50)
+      return
+    }
+  }
+
+  g_WL_TtsState := "failed"
+  g_WL_TtsStage := ""
+}
+
+; ===== 后台轮询单词预生成，低码率或失败时自动升级 Google TTS =====
+WL_PollPregenTts()
+{
+  global g_WL_TtsFile, g_WL_TtsPid, g_WL_TtsWord, g_WL_TtsGenTick, g_TtsMinGoodBitrate
+  global g_WL_TtsState, g_WL_TtsStage, g_WL_TtsPlayPending
+  global g_WL_TtsTmpYoudao, g_WL_TtsTmpGoogle, g_WL_TtsFallbackFile, g_WL_TtsTargetCache, g_WL_TtsLang
+
+  if (g_WL_TtsPid <= 0) {
+    SetTimer(WL_PollPregenTts, 0)
+    return
+  }
+
+  timeoutMs := (g_WL_TtsStage = "youdao") ? 2500 : 4500
+  if (ProcessExist(g_WL_TtsPid)) {
+    if (A_TickCount - g_WL_TtsGenTick <= timeoutMs)
+      return
     try ProcessClose(g_WL_TtsPid)
   }
   g_WL_TtsPid := 0
 
-  ; 优先播放有道真人原声（文件大于 500 字节，排除空文件或损坏文件）
-  try {
-    if (FileExist(g_WL_TtsFile) && FileGetSize(g_WL_TtsFile) > 500) {
-      ; 打断上一次朗读
-      try SoundPlay("NonExistent.zzz")
-      StopLocalSapi()
-      SoundPlay(g_WL_TtsFile)
+  if (g_WL_TtsStage = "youdao") {
+    ydFile := g_WL_TtsTmpYoudao
+    g_WL_TtsTmpYoudao := ""
+    mp3 := TtsGetMp3Info(ydFile)
+    if (mp3.valid && mp3.bitrateKbps >= g_TtsMinGoodBitrate) {
+      SetTimer(WL_PollPregenTts, 0)
+      g_WL_TtsFile := TtsSaveToCache(ydFile, g_WL_TtsTargetCache)
+      g_WL_TtsStage := ""
+      g_WL_TtsState := "ready"
+      if (g_WL_TtsPlayPending) {
+        g_WL_TtsPlayPending := false
+        WL_PlayCurrentWordAudio()
+      }
       return
     }
-  } catch {
+    if (mp3.valid)
+      g_WL_TtsFallbackFile := ydFile
+    else
+      TtsDeleteTempFile(ydFile)
+
+    if (StrLen(g_WL_TtsWord) <= 190) {
+      tmpG := A_Temp . "\ahk_wl_tts_g_" . A_TickCount . ".mp3"
+      outPid := RunGoogleTtsAudio(g_WL_TtsWord, tmpG, g_WL_TtsLang)
+      if (outPid) {
+        g_WL_TtsTmpGoogle := tmpG
+        g_WL_TtsStage := "google"
+        g_WL_TtsPid := outPid
+        g_WL_TtsGenTick := A_TickCount
+        return
+      }
+    }
+
+    SetTimer(WL_PollPregenTts, 0)
+    g_WL_TtsStage := ""
+    WL_ApplyPregenFallback()
+    if (g_WL_TtsPlayPending) {
+      g_WL_TtsPlayPending := false
+      WL_PlayCurrentWordAudio()
+    }
+    return
   }
 
-  ; 降级兜底：断网或下载失败时使用 Windows 本地 SAPI 离线朗读
-  PlayLocalSapi(text)
+  if (g_WL_TtsStage = "google") {
+    SetTimer(WL_PollPregenTts, 0)
+    gFile := g_WL_TtsTmpGoogle
+    g_WL_TtsTmpGoogle := ""
+    if (TtsGetMp3Info(gFile).valid) {
+      g_WL_TtsFile := TtsSaveToCache(gFile, g_WL_TtsTargetCache)
+      TtsDeleteTempFile(g_WL_TtsFallbackFile)
+      g_WL_TtsFallbackFile := ""
+      g_WL_TtsState := "ready"
+    } else {
+      TtsDeleteTempFile(gFile)
+      WL_ApplyPregenFallback()
+    }
+    g_WL_TtsStage := ""
+    if (g_WL_TtsPlayPending) {
+      g_WL_TtsPlayPending := false
+      WL_PlayCurrentWordAudio()
+    }
+    return
+  }
+
+  SetTimer(WL_PollPregenTts, 0)
+}
+
+WL_PlayCurrentWordAudio()
+{
+  global WL_CurrentWord, g_WL_TtsWord, g_WL_TtsFile
+  if (g_WL_TtsFile != "" && TtsGetMp3Info(g_WL_TtsFile).valid) {
+    TtsPlayAudioFileNow(g_WL_TtsFile)
+    return
+  }
+  txt := Trim(WL_CurrentWord)
+  if (txt = "")
+    txt := g_WL_TtsWord
+  if (txt != "")
+    PlayLocalSapi(txt)
+}
+
+; ===== 强制单次朗读单词（右键触发，就绪即秒播，加载中则在完成瞬间自动播） =====
+WL_PlayTtsOnce()
+{
+  global WL_CurrentWord, g_WL_TtsWord, g_WL_TtsState, g_WL_TtsPlayPending
+
+  WL_StopSentenceTts()
+  text := Trim(WL_CurrentWord)
+  if (text = "")
+    return
+
+  if (text != g_WL_TtsWord || g_WL_TtsState = "idle")
+    WL_PregenTts(text)
+
+  if (g_WL_TtsState = "loading") {
+    g_WL_TtsPlayPending := true
+    return
+  }
+
+  g_WL_TtsPlayPending := false
+  WL_PlayCurrentWordAudio()
 }
 
 ; ===== 全局右键拦截处理函数（由 Hotkey() 动态注册） =====
@@ -1217,23 +1451,77 @@ WL_HandleRightClick()
   }
 }
 
-; ===== 朗读完整语境句子（直接使用本地 SAPI 极速朗读） =====
+WL_StopSentenceTts()
+{
+  global g_WL_SentPid, g_WL_SentText, g_WL_SentJob
+  SetTimer(WL_PollSentenceTts, 0)
+  if IsObject(g_WL_SentJob)
+    TtsGoogleJobStop(g_WL_SentJob)
+  g_WL_SentJob := ""
+  if (g_WL_SentPid > 0 && ProcessExist(g_WL_SentPid))
+    try ProcessClose(g_WL_SentPid)
+  g_WL_SentPid := 0
+  g_WL_SentText := ""
+}
+
+; ===== 朗读完整语境句子（缓存 → Google 神经网络分片 → 本地 SAPI 兜底；保留后台单词预生成不中断） =====
 WL_PlaySentenceTts(sentence)
 {
-  global g_WL_TtsPid
-  
-  if (g_WL_TtsPid > 0) {
-    try ProcessClose(g_WL_TtsPid)
-    g_WL_TtsPid := 0
-  }
+  global g_WL_TtsPlayPending, g_WL_SentPid, g_WL_SentText, g_WL_SentJob
+
+  WL_StopSentenceTts()
+  g_WL_TtsPlayPending := false
   try SoundPlay("NonExistent.zzz")
   StopLocalSapi()
-  
-  sentence := Trim(sentence)
+
+  sentence := Trim(RegExReplace(sentence, "[\r\n\s]+", " "))
   if (sentence = "")
     return
-    
+
+  info := TtsResolveCacheInfo(sentence)
+  sentCache := TtsGetCachePath("s:" . sentence, info.lang)
+  if TtsCacheHit(sentCache, false) {
+    TtsPlayAudioFileNow(sentCache)
+    return
+  }
+
+  chunks := TtsSplitTextForGoogle(sentence, 180, 3)
+  job := TtsGoogleJobStart(chunks, info.lang, sentCache, "ahk_wl_sent")
+  if IsObject(job) {
+    g_WL_SentJob := job
+    g_WL_SentPid := job.pid
+    g_WL_SentText := sentence
+    SetTimer(WL_PollSentenceTts, 50)
+    return
+  }
+
   PlayLocalSapi(sentence)
+}
+
+WL_PollSentenceTts()
+{
+  global g_WL_SentPid, g_WL_SentText, g_WL_SentJob
+  if !IsObject(g_WL_SentJob) {
+    SetTimer(WL_PollSentenceTts, 0)
+    g_WL_SentPid := 0
+    return
+  }
+  step := TtsGoogleJobStep(g_WL_SentJob, 4500)
+  g_WL_SentPid := g_WL_SentJob.pid
+  if (!step.done)
+    return
+
+  SetTimer(WL_PollSentenceTts, 0)
+  g_WL_SentPid := 0
+  sentText := g_WL_SentText
+  if (step.ok) {
+    TtsPlayAudioFileNow(step.file)
+  } else {
+    TtsGoogleJobStop(g_WL_SentJob)
+    g_WL_SentJob := ""
+    if (sentText != "")
+      PlayLocalSapi(sentText)
+  }
 }
 
 
@@ -1363,9 +1651,9 @@ WL_SendToAnki(*)
             frontJson := EscapeJSON(frontText)
             backJson := EscapeJSON(backText)
 
-            ; 处理音频
+            ; 处理音频（仅附带通过 MP3 帧头校验的合法文件）
             audioJson := ""
-            if (g_WL_TtsFile != "" && FileExist(g_WL_TtsFile)) {
+            if (g_WL_TtsFile != "" && TtsGetMp3Info(g_WL_TtsFile).valid) {
                 absPath := StrReplace(g_WL_TtsFile, "\", "\\")
                 ; 文件名安全化：去掉引号/反斜杠/空格等非法字符，避免破坏 JSON 报文与文件名
                 safeName := RegExReplace(word, "[^\w\x{4e00}-\x{9fff}]", "_")
@@ -1500,8 +1788,8 @@ WL_CheckAnkiStatus(word) {
     SetTimer(AnkiSyncCheck, -1) ; 负数 = 单次触发，延迟 1ms 后执行
 }
 
-; ===== F2 单/双击判定状态机（记录按下时刻鼠标坐标供单按延迟执行，屏蔽长按自动重复与机械抖动） =====
-F2_OnKeyDown(state, nowTick, snapX, snapY, snapWin)
+; ===== F2 / 组合键单双击判定状态机（记录可选鼠标快照供单按延迟执行，屏蔽长按自动重复与机械抖动） =====
+F2_OnKeyDown(state, nowTick, snapX := 0, snapY := 0, snapWin := 0)
 {
     if (state.isDown && (nowTick - state.downTick < 1000))
         return "ignore"
@@ -1532,9 +1820,10 @@ F2_OnKeyDown(state, nowTick, snapX, snapY, snapWin)
 ; 终止本脚本仍在运行的子进程（curl），删除临时文件（含写有 API key 的 curl 配置文件）。
 WL_CleanupOnExit(*)
 {
-  global g_WL_TtsPid, g_WL_StreamPid, g_StreamPidChat, g_TtsProcPid
+  global g_WL_TtsPid, g_WL_SentPid, g_WL_StreamPid, g_StreamPidChat, g_TtsProcPid
   try SoundPlay("NonExistent.zzz")
-  for pid in [g_WL_TtsPid, g_WL_StreamPid, g_StreamPidChat, g_TtsProcPid] {
+  StopLocalSapi()
+  for pid in [g_WL_TtsPid, g_WL_SentPid, g_WL_StreamPid, g_StreamPidChat, g_TtsProcPid] {
     try {
       if (pid > 0 && ProcessExist(pid)) {
         name := ProcessGetName(pid)
@@ -1545,7 +1834,8 @@ WL_CleanupOnExit(*)
   }
   CurlCleanupTempFiles("wl")
   CurlCleanupTempFiles("chat")
-  for name in ["ahk_wl_tts_*.mp3", "ahk_tts_youdao.mp3", "ahk_wl_stream_word.txt", "ahk_wl_request_word.json"]
+  ; 保留 %TEMP%\ahk_tts_cache\ 中的高音质缓存，仅清理临时下载与中间分片文件
+  for name in ["ahk_wl_tts_*.mp3", "ahk_tts_tmp_*.mp3", "ahk_wl_sent_*.mp3", "ahk_tts_youdao.mp3", "ahk_wl_stream_word.txt", "ahk_wl_request_word.json"]
     try FileDelete(A_Temp . "\" . name)
 }
 OnExit(WL_CleanupOnExit)

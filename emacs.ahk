@@ -517,6 +517,42 @@ XButton2::Send("!{Right}")  ; 前进键（靠前那个）-> Alt+Right，即浏�
 ;     用着不顺手，同月 19 日改回浏览器前进。Gemini 开关仍在 F2 上。
 #Space::Send("{Ctrl down}{Space}{Ctrl up}")
 
+; 雷蛇侧键 6（映射为 Right Ctrl + T）：单按保持原 Right Ctrl + T，双击触发 F5
+global g_RCtrlTTapState := {isDown: false, downTick: 0, lastTapTick: 0, lastDoubleTick: 0, pendingSingle: false, snapX: 0, snapY: 0, snapWin: 0}
+
+$>^t::HandleRCtrlTDown()
+
+#HotIf g_RCtrlTTapState.isDown
+~*t up::HandleRCtrlTUp()
+#HotIf
+
+HandleRCtrlTDown()
+{
+    global g_RCtrlTTapState
+    action := F2_OnKeyDown(g_RCtrlTTapState, A_TickCount)
+    if (action = "double") {
+        SetTimer(RunRCtrlTSingleTap, 0)
+        Send("{RCtrl up}{F5}")
+    } else if (action = "wait_single") {
+        SetTimer(RunRCtrlTSingleTap, -350)
+    }
+}
+
+HandleRCtrlTUp()
+{
+    global g_RCtrlTTapState
+    g_RCtrlTTapState.isDown := false
+}
+
+RunRCtrlTSingleTap()
+{
+    global g_RCtrlTTapState
+    if (!g_RCtrlTTapState.pendingSingle)
+        return
+    g_RCtrlTTapState.pendingSingle := false
+    Send("{RCtrl down}t{RCtrl up}")
+}
+
 
 ;居中显示
 ^!down::
@@ -564,48 +600,56 @@ return
 ; 缓存获取到的 Gemini 窗口句柄
 global GeminiAutoHwnd := 0
 
+; 严格判断 hwnd 是否为独立的 Gemini 浮窗/PWA（绝不匹配 Chrome 主浏览器窗口）
+IsGeminiWindowMatch(hwnd, requireVisible := true)
+{
+    if (!hwnd)
+        return false
+    prevDetect := DetectHiddenWindows(!requireVisible)
+    try {
+        if (WinGetClass(hwnd) != "Chrome_WidgetWin_1")
+            return false
+        style := WinGetStyle(hwnd)
+        if (requireVisible && !(style & 0x10000000))
+            return false
+        if ((style & 0xC00000) != 0xC00000)
+            return false
+        title := WinGetTitle(hwnd)
+        ; Chrome 主浏览器窗口标题始终含 "Google Chrome"，严格排除；
+        ; 独立 Gemini 浮窗标题为 ""，独立 PWA 窗口标题精确为 "Gemini"
+        if (InStr(title, "Google Chrome") || (title != "" && title != "Gemini"))
+            return false
+        if (WinGetMinMax(hwnd) != -1) {
+            WinGetPos(, , &w, &h, hwnd)
+            if (w < 200 || h < 200)
+                return false
+        }
+        if (StrLower(WinGetProcessName(hwnd)) != "chrome.exe")
+            return false
+        return true
+    } catch {
+        return false
+    } finally {
+        DetectHiddenWindows(prevDetect)
+    }
+}
+
 ; 自动寻找 Gemini 窗口的函数
 GetGeminiWindow()
 {
     global GeminiAutoHwnd
-    
-    ; 如果之前找到过并且窗口还在，就直接用之前的句柄（避免隐藏后找不到）
+
+    ; 如果之前找到过并且仍确认为独立 Gemini 窗口，就直接复用（避免隐藏后找不到）
     if (GeminiAutoHwnd)
     {
-        DetectHiddenWindows(true)
-        exists := WinExist("ahk_id " . GeminiAutoHwnd)
-        DetectHiddenWindows(false)
-        if (exists)
+        if (IsGeminiWindowMatch(GeminiAutoHwnd, false))
             return GeminiAutoHwnd
+        GeminiAutoHwnd := 0
     }
 
-    hwnds := WinGetList("ahk_class Chrome_WidgetWin_1 ahk_exe chrome.exe")
-    for hwnd in hwnds
+    for hwnd in WinGetList("ahk_class Chrome_WidgetWin_1 ahk_exe chrome.exe")
     {
-        ; 枚举之后窗口可能已经关闭（如 Chrome 的临时气泡窗口），WinGet* 会抛 TargetError，
-        ; 不捕获会让 F2 / Ctrl+Alt+Down 整个热键报错中断
-        try {
-            style := WinGetStyle(hwnd)
-            ; 必须是可见窗口
-            if !(style & 0x10000000)
-                continue
-
-            ; 必须带标准标题栏（WS_CAPTION = 0xC00000）且尺寸像正常应用窗口：
-            ; Chrome 的拖拽预览、气泡提示等辅助窗口也是可见+空标题的 Chrome_WidgetWin_1，
-            ; 不过滤会被误认成 Gemini，导致 F2 隐藏错误的窗口
-            if ((style & 0xC00000) != 0xC00000)
-                continue
-            WinGetPos(, , &w, &h, hwnd)
-            if (w < 200 || h < 200)
-                continue
-
-            title := WinGetTitle(hwnd)
-        } catch {
-            continue
-        }
-
-        ; 你的 Gemini 作为 Chrome PWA 运行时，系统获取到的窗口标题正好为空字符串 ""
-        if (title == "")
+        if (IsGeminiWindowMatch(hwnd, true))
         {
             GeminiAutoHwnd := hwnd
             return hwnd
@@ -646,26 +690,23 @@ FindHiddenGeminiWindow()
 {
     global GeminiAutoHwnd
     result := 0
-    DetectHiddenWindows(true)
-    for hwnd in WinGetList("ahk_class Chrome_WidgetWin_1 ahk_exe chrome.exe")
-    {
-        try {
-            style := WinGetStyle(hwnd)
-            if (style & 0x10000000)             ; 只捡隐藏的，可见的归 GetGeminiWindow 管
-                continue
-            if ((style & 0xC00000) != 0xC00000) ; 同样要求标准标题栏，滤掉 Chrome 的辅助窗口
-                continue
-            WinGetPos(, , &w, &h, hwnd)
-            if (w < 200 || h < 200)
-                continue
-            if (WinGetTitle(hwnd) == "")
-            {
-                result := hwnd
-                break
+    prevDetect := DetectHiddenWindows(true)
+    try {
+        for hwnd in WinGetList("ahk_class Chrome_WidgetWin_1 ahk_exe chrome.exe")
+        {
+            try {
+                if (WinGetStyle(hwnd) & 0x10000000) ; 只捡隐藏的，可见的归 GetGeminiWindow 管
+                    continue
+                if (IsGeminiWindowMatch(hwnd, false))
+                {
+                    result := hwnd
+                    break
+                }
             }
         }
+    } finally {
+        DetectHiddenWindows(prevDetect)
     }
-    DetectHiddenWindows(false)
     if (result)
         GeminiAutoHwnd := result
     return result
@@ -877,13 +918,13 @@ EnsureWindowOnScreen(hwnd)
     }
 }
 
-; 通过 UIA 定位 Gemini 输入框（窗口底部最靠下的可聚焦编辑框）并点击聚焦。
+; 通过 UIA 定位 Gemini 输入框（窗口底部最靠下的可聚焦编辑框）并无感聚焦（不移动物理鼠标）。
 ; 坐标来自元素实际位置，RDP 会话下 DPI/分辨率变化时依然命中；
 ; 轮询等待输入框出现，覆盖 RDP 位图远传导致 Chrome 渲染变慢的情况
 ; 在 Gemini 窗口里筛出"像输入框"的可聚焦 Edit 元素，按 UIA 枚举顺序返回数组
 ; （每项为 {el, loc}），UIA 不可用或一个都没有时返回空数组。
 ;
-; 只负责筛选、不做取舍：两个调用方要的不一样——FocusGeminiInput 取最靠下的那个去点击，
+; 只负责筛选、不做取舍：两个调用方要的不一样——FocusGeminiInput 取最靠下的那个无感聚焦，
 ; WaitGeminiInputReady 只要任意一个有文本就算就绪。
 ; 筛选条件此前在这两处各抄了一份，其中一份还把"为什么这样筛"的注释弄丢了，
 ; 以后 Gemini 改版要调阈值，很容易只改一处。
@@ -931,15 +972,33 @@ FocusGeminiInput(hwnd, timeoutMs := 2500)
                 bestLoc := c.loc
             }
         }
-        ; 整段包在 try 里：与重构前一致，SetFocus/Click 抛异常时不往外冒，
-        ; 而是落到下面的 Sleep 后重试
+        ; 优先用纯 UIA 接口聚焦（0 鼠标移动）；仅在均未获焦时才用后台消息 ControlClick 兜底
         try {
             if (best)
             {
+                try if (best.HasKeyboardFocus)
+                    return true
+
                 try best.SetFocus()
-                CoordMode("Mouse", "Screen")
-                Click(bestLoc.x + (bestLoc.w // 2), bestLoc.y + (bestLoc.h // 2))
                 Loop 4 {
+                    Sleep(20)
+                    try if (best.HasKeyboardFocus)
+                        return true
+                }
+
+                try best.LegacyIAccessiblePattern.Select(1) ; SELFLAG_TAKEFOCUS = 1
+                try best.SetFocus()
+                Loop 3 {
+                    Sleep(20)
+                    try if (best.HasKeyboardFocus)
+                        return true
+                }
+
+                WinGetPos(&wx, &wy, , , "ahk_id " . hwnd)
+                relX := (bestLoc.x + (bestLoc.w // 2)) - wx
+                relY := (bestLoc.y + (bestLoc.h // 2)) - wy
+                ControlClick("x" . relX . " y" . relY, "ahk_id " . hwnd, , "Left", 1, "NA")
+                Loop 3 {
                     Sleep(20)
                     try if (best.HasKeyboardFocus)
                         break
@@ -952,16 +1011,15 @@ FocusGeminiInput(hwnd, timeoutMs := 2500)
     return false
 }
 
-; 优先通过 UIA 聚焦底部输入框，不可用时回退固定偏移点击
+; 优先通过 UIA 无感聚焦底部输入框，不可用时回退后台消息点击（均不移动物理鼠标）
 ActivateGeminiInputBox(hwnd)
 {
     if (!FocusGeminiInput(hwnd))
     {
-        ; UIA 不可用时回退原方案：点击底部中央上移 85px 处
+        ; UIA 不可用时回退后台消息点击底部中央上移 85px 处（不移动物理鼠标）
         Sleep(200)
-        WinGetPos(&gx, &gy, &gw, &gh, "ahk_id " . hwnd)
-        CoordMode("Mouse", "Screen")
-        Click(gx + (gw // 2), gy + gh - 85)
+        WinGetPos(, , &gw, &gh, "ahk_id " . hwnd)
+        ControlClick("x" . (gw // 2) . " y" . Max(10, gh - 85), "ahk_id " . hwnd, , "Left", 1, "NA")
         Sleep(120)
     }
 }
@@ -1070,7 +1128,7 @@ HandleF2Down()
         SetTimer(RunF2SingleTap, 0)
         GeminiToggle(true)
     } else if (action = "wait_single") {
-        SetTimer(RunF2SingleTap, -260)
+        SetTimer(RunF2SingleTap, -350)
     }
 }
 
@@ -1099,10 +1157,10 @@ GeminiToggle(onlyOpen := false, snapX?, snapY?, snapWin?)
     hasWord := false
     if (!GeminiHwnd)
     {
-        ; 如果没找到空标题的，也可以尝试找找名字里带 Gemini 的
-        if WinExist("Gemini ahk_exe chrome.exe")
+        ; 优先认领"已弹出但被隐藏"的真 Gemini 窗口，禁止再用标题子串匹配主 Chrome 窗口
+        GeminiHwnd := FindHiddenGeminiWindow()
+        if (GeminiHwnd)
         {
-            GeminiHwnd := WinGetID("Gemini ahk_exe chrome.exe")
             GeminiAutoHwnd := GeminiHwnd
         }
         else
@@ -1138,6 +1196,11 @@ GeminiToggle(onlyOpen := false, snapX?, snapY?, snapWin?)
     ; 只有单按且窗口在屏幕上（非刚弹出）时才隐藏；双击 F2 一律走显示/激活分支
     if (!onlyOpen && isVisible && !justOpened)
     {
+        if (!IsGeminiWindowMatch(GeminiHwnd, true))
+        {
+            GeminiAutoHwnd := 0
+            return
+        }
         ; 只要窗口在屏幕上（不管是不是活动窗口），按 F2 一律直接隐藏（从任务栏也消失）
         try {
             WinHide("ahk_id " . GeminiHwnd)
@@ -1176,12 +1239,7 @@ GeminiToggle(onlyOpen := false, snapX?, snapY?, snapWin?)
         {
             try {
                 if WinWaitActive("ahk_id " . GeminiHwnd, , 3)
-                {
-                    CoordMode("Mouse", "Screen")
-                    MouseGetPos(&origX, &origY)
                     ActivateGeminiInputBox(GeminiHwnd)
-                    MouseMove(origX, origY)
-                }
             }
             catch TargetError {
                 GeminiAutoHwnd := 0
@@ -1209,14 +1267,10 @@ GeminiToggle(onlyOpen := false, snapX?, snapY?, snapWin?)
         }
 
         pasteConfirmed := false
-        ; 等待窗口激活后聚焦输入框、清除并粘贴
+        ; 等待窗口激活后无感聚焦输入框、清除并粘贴
         try {
             if WinWaitActive("ahk_id " . GeminiHwnd, , 3)
             {
-                ; 保存鼠标原位置，操作完成后恢复（显式 Screen 坐标避免定时器线程默认 Window 坐标漂移）
-                CoordMode("Mouse", "Screen")
-                MouseGetPos(&origX, &origY)
-
                 ActivateGeminiInputBox(GeminiHwnd)
                 try {
                     Suspend(true)  ; 暂时挂起热键，防止 ^a 被 emacs 绑定拦截
@@ -1232,9 +1286,6 @@ GeminiToggle(onlyOpen := false, snapX?, snapY?, snapWin?)
                 } finally {
                     Suspend(false)  ; 无论是否抛错都必须恢复，否则所有 emacs 热键会永久失效
                 }
-
-                ; 恢复鼠标到原位置
-                MouseMove(origX, origY)
             }
         }
         catch TargetError {
@@ -1256,34 +1307,17 @@ IsGeminiHwnd(hwnd)
         return false
 
     if (GeminiAutoHwnd && hwnd == GeminiAutoHwnd) {
-        try {
-            if (WinGetStyle(hwnd) & 0x10000000)
-                return true
-        } catch {
-            GeminiAutoHwnd := 0
-        }
+        if (IsGeminiWindowMatch(hwnd, true))
+            return true
+        GeminiAutoHwnd := 0
         return false
     }
 
-    try {
-        if (WinGetClass(hwnd) != "Chrome_WidgetWin_1")
-            return false
-        style := WinGetStyle(hwnd)
-        if !(style & 0x10000000) || ((style & 0xC00000) != 0xC00000)
-            return false
-        title := WinGetTitle(hwnd)
-        if (title != "" && title != "Gemini")
-            return false
-        WinGetPos(, , &w, &h, hwnd)
-        if (w < 200 || h < 200)
-            return false
-        if (StrLower(WinGetProcessName(hwnd)) != "chrome.exe")
-            return false
+    if (IsGeminiWindowMatch(hwnd, true)) {
         GeminiAutoHwnd := hwnd
         return true
-    } catch {
-        return false
     }
+    return false
 }
 
 ; 右键仅在 Gemini 为当前活动窗口或鼠标正悬停于其上时拦截，兼顾置顶未激活与刚重载脚本场景
